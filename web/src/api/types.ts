@@ -35,3 +35,47 @@ export interface CreateTaskRequest {
 export interface ChatRequest {
   message: string;
 }
+
+export type StoryStatus = 'active' | 'completed' | 'archived';
+export type LayerStatus = 'pending' | 'in_progress' | 'review' | 'merged';
+
+export interface Story {
+  id: string;
+  title: string;
+  description: string;
+  layer_chain: string;
+  status: StoryStatus;
+  created_at: string;
+  updated_at: string;
+  layers: StoryLayer[];
+}
+
+export interface StoryLayer {
+  id: string;
+  story_id: string;
+  layer_name: string;
+  status: LayerStatus;
+  pr_url: string;
+  pr_number: number;
+  pr_state: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateStoryRequest {
+  title: string;
+  description?: string;
+  layer_chain?: string;
+}
+
+export interface CreateLayerRequest {
+  layer_name: string;
+  status?: LayerStatus;
+  pr_url?: string;
+}
+
+export interface LayerChain {
+  name: string;
+  layers: string[];
+}

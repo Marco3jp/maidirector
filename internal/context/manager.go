@@ -17,6 +17,7 @@ type ConversationStore interface {
 	GetLatestSummary(scope string) (*task.Summary, error)
 	CreateSummary(s *task.Summary) error
 	ListTasks(status string, project string) ([]*task.Task, error)
+	ListStories(status string) ([]*task.Story, error)
 }
 
 type Manager struct {
@@ -141,6 +142,9 @@ func (m *Manager) buildSuggestPrompt(ctx gocontext.Context) ([]llm.ChatMessage, 
 	activeTasks := filterActiveTasks(tasks)
 	taskSummary := formatTasks(activeTasks)
 
+	stories, _ := m.store.ListStories("active")
+	storySummary := formatStories(stories)
+
 	var relatedContext string
 	if len(activeTasks) > 0 {
 		query := buildRecentActivityQuery(activeTasks)
@@ -156,7 +160,7 @@ func (m *Manager) buildSuggestPrompt(ctx gocontext.Context) ([]llm.ChatMessage, 
 		summaryText = globalSummary.Content
 	}
 
-	systemPrompt := buildSuggestSystemPrompt(taskSummary, relatedContext, summaryText)
+	systemPrompt := buildSuggestSystemPrompt(taskSummary, storySummary, relatedContext, summaryText)
 
 	return []llm.ChatMessage{
 		{Role: "system", Content: systemPrompt},
@@ -177,16 +181,24 @@ func (m *Manager) buildChatPrompt(ctx gocontext.Context, userMessage string) ([]
 	activeTasks := filterActiveTasks(tasks)
 	taskSummary := formatTasks(activeTasks)
 
+	stories, _ := m.store.ListStories("active")
+	storySummary := formatStories(stories)
+
+	var storySection string
+	if storySummary != "" {
+		storySection = fmt.Sprintf("\n## ストーリー（施策）のパイプライン状況\n%s", storySummary)
+	}
+
 	systemPrompt := fmt.Sprintf(`あなたは「maidirector」、開発者の作業を支援するAIアシスタントです。
 タスクの状況を把握し、的確なアドバイスを提供してください。
 
 ## 現在のタスク一覧
 %s
-
+%s
 ## 関連する過去の文脈
 %s
 
-回答は簡潔かつ具体的にお願いします。`, taskSummary, relatedContext)
+回答は簡潔かつ具体的にお願いします。`, taskSummary, storySection, relatedContext)
 
 	messages := []llm.ChatMessage{{Role: "system", Content: systemPrompt}}
 
@@ -263,20 +275,56 @@ func buildRecentActivityQuery(tasks []*task.Task) string {
 	return strings.Join(titles, " ")
 }
 
-func buildSuggestSystemPrompt(taskSummary, relatedContext, globalSummary string) string {
+func formatStories(stories []*task.Story) string {
+	if len(stories) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	for _, s := range stories {
+		b.WriteString(fmt.Sprintf("### %s (chain: %s)\n", s.Title, s.LayerChain))
+		if s.Description != "" {
+			b.WriteString(fmt.Sprintf("  %s\n", s.Description))
+		}
+		if len(s.Layers) == 0 {
+			b.WriteString("  レイヤー: なし\n")
+			continue
+		}
+		for i, l := range s.Layers {
+			blocked := ""
+			if i > 0 && s.Layers[i-1].Status != task.LayerStatusMerged {
+				blocked = " [ブロック中]"
+			}
+			prInfo := ""
+			if l.PRUrl != "" {
+				prInfo = fmt.Sprintf(" (PR: %s)", l.PRUrl)
+			}
+			b.WriteString(fmt.Sprintf("  %d. %s: %s%s%s\n", i+1, l.LayerName, l.Status, blocked, prInfo))
+		}
+	}
+	return b.String()
+}
+
+func buildSuggestSystemPrompt(taskSummary, storySummary, relatedContext, globalSummary string) string {
 	var b strings.Builder
 	b.WriteString(`あなたは「maidirector」、開発者の作業を支援するAIアシスタントです。
 以下の情報を基に、開発者が次に取り組むべきタスクを優先度付きで提案してください。
 
 ## 判断基準
 1. ブロッカーの解消が最優先
-2. 進行中のタスクの完了を優先
-3. 優先度の高いタスクを優先
-4. 長時間放置されているタスクに注意を促す
+2. ストーリーのパイプラインで上流がマージ済みなのに下流が未着手の場合、着手を提案
+3. 進行中のタスクの完了を優先
+4. 優先度の高いタスクを優先
+5. 長時間放置されているタスクに注意を促す
 
 ## 現在のタスク一覧
 `)
 	b.WriteString(taskSummary)
+
+	if storySummary != "" {
+		b.WriteString("\n## ストーリー（施策）のパイプライン状況\n")
+		b.WriteString(storySummary)
+	}
 
 	if relatedContext != "" {
 		b.WriteString("\n## 関連する過去の文脈\n")

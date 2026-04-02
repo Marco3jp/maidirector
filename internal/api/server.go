@@ -20,6 +20,7 @@ import (
 type Server struct {
 	cfg         *config.Config
 	taskSvc     *task.Service
+	storySvc    *task.StoryService
 	ctxMgr      *context.Manager
 	llmClient   llm.Provider
 	vectorStore *vectorstore.VectorStore
@@ -27,10 +28,11 @@ type Server struct {
 	httpServer  *http.Server
 }
 
-func NewServer(cfg *config.Config, taskSvc *task.Service, ctxMgr *context.Manager, llmClient llm.Provider, vs *vectorstore.VectorStore, staticFS ...fs.FS) *Server {
+func NewServer(cfg *config.Config, taskSvc *task.Service, storySvc *task.StoryService, ctxMgr *context.Manager, llmClient llm.Provider, vs *vectorstore.VectorStore, staticFS ...fs.FS) *Server {
 	s := &Server{
 		cfg:         cfg,
 		taskSvc:     taskSvc,
+		storySvc:    storySvc,
 		ctxMgr:      ctxMgr,
 		llmClient:   llmClient,
 		vectorStore: vs,
@@ -46,6 +48,16 @@ func NewServer(cfg *config.Config, taskSvc *task.Service, ctxMgr *context.Manage
 	mux.HandleFunc("DELETE /api/tasks/{id}", s.handleDeleteTask)
 	mux.HandleFunc("POST /api/tasks/{id}/context", s.handleAddContext)
 	mux.HandleFunc("GET /api/tasks/{id}/context", s.handleListContext)
+
+	mux.HandleFunc("GET /api/stories", s.handleListStories)
+	mux.HandleFunc("POST /api/stories", s.handleCreateStory)
+	mux.HandleFunc("GET /api/stories/{id}", s.handleGetStory)
+	mux.HandleFunc("PUT /api/stories/{id}", s.handleUpdateStory)
+	mux.HandleFunc("DELETE /api/stories/{id}", s.handleDeleteStory)
+	mux.HandleFunc("POST /api/stories/{id}/layers", s.handleAddLayer)
+	mux.HandleFunc("PUT /api/stories/{storyId}/layers/{layerId}", s.handleUpdateLayer)
+	mux.HandleFunc("DELETE /api/stories/{storyId}/layers/{layerId}", s.handleDeleteLayer)
+	mux.HandleFunc("GET /api/layer-chains", s.handleGetLayerChains)
 
 	mux.HandleFunc("POST /api/suggest", s.handleSuggest)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
@@ -210,6 +222,168 @@ func (s *Server) handleListContext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, entries)
+}
+
+// --- Story handlers ---
+
+func (s *Server) handleListStories(w http.ResponseWriter, r *http.Request) {
+	status := r.URL.Query().Get("status")
+	stories, err := s.storySvc.List(status)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if stories == nil {
+		stories = []*task.Story{}
+	}
+	writeJSON(w, http.StatusOK, stories)
+}
+
+func (s *Server) handleCreateStory(w http.ResponseWriter, r *http.Request) {
+	var st task.Story
+	if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if st.Title == "" {
+		writeError(w, http.StatusBadRequest, "title is required")
+		return
+	}
+	if err := s.storySvc.Create(&st); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	st.Layers = []*task.StoryLayer{}
+	s.wsHub.Broadcast(ws.Message{Type: "story_created", Payload: st})
+	writeJSON(w, http.StatusCreated, st)
+}
+
+func (s *Server) handleGetStory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	st, err := s.storySvc.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "story not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleUpdateStory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	existing, err := s.storySvc.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "story not found")
+		return
+	}
+
+	var updates task.Story
+	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	existing.Title = updates.Title
+	existing.Description = updates.Description
+	existing.LayerChain = updates.LayerChain
+	existing.Status = updates.Status
+
+	if err := s.storySvc.Update(existing); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: existing})
+	writeJSON(w, http.StatusOK, existing)
+}
+
+func (s *Server) handleDeleteStory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.storySvc.Delete(id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.wsHub.Broadcast(ws.Message{Type: "story_deleted", Payload: map[string]string{"id": id}})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleAddLayer(w http.ResponseWriter, r *http.Request) {
+	storyID := r.PathValue("id")
+	if _, err := s.storySvc.Get(storyID); err != nil {
+		writeError(w, http.StatusNotFound, "story not found")
+		return
+	}
+
+	var layer task.StoryLayer
+	if err := json.NewDecoder(r.Body).Decode(&layer); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if layer.LayerName == "" {
+		writeError(w, http.StatusBadRequest, "layer_name is required")
+		return
+	}
+
+	layer.StoryID = storyID
+	if err := s.storySvc.AddLayer(&layer); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: map[string]string{"story_id": storyID}})
+	writeJSON(w, http.StatusCreated, layer)
+}
+
+func (s *Server) handleUpdateLayer(w http.ResponseWriter, r *http.Request) {
+	layerID := r.PathValue("layerId")
+	existing, err := s.storySvc.GetLayer(layerID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "layer not found")
+		return
+	}
+
+	var updates task.StoryLayer
+	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	existing.LayerName = updates.LayerName
+	existing.Status = updates.Status
+	existing.PRUrl = updates.PRUrl
+	existing.PRNumber = updates.PRNumber
+	existing.PRState = updates.PRState
+	if updates.SortOrder != 0 {
+		existing.SortOrder = updates.SortOrder
+	}
+
+	if err := s.storySvc.UpdateLayer(existing); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: map[string]string{"story_id": existing.StoryID}})
+	writeJSON(w, http.StatusOK, existing)
+}
+
+func (s *Server) handleDeleteLayer(w http.ResponseWriter, r *http.Request) {
+	storyID := r.PathValue("storyId")
+	layerID := r.PathValue("layerId")
+
+	if err := s.storySvc.DeleteLayer(layerID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: map[string]string{"story_id": storyID}})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleGetLayerChains(w http.ResponseWriter, _ *http.Request) {
+	chains := s.cfg.LayerChains
+	if chains == nil {
+		chains = []config.LayerChainConfig{}
+	}
+	writeJSON(w, http.StatusOK, chains)
 }
 
 // --- Suggest / Chat handlers ---

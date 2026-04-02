@@ -47,3 +47,44 @@ type Summary struct {
 	Content   string    `json:"content"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+type StoryStatus string
+
+const (
+	StoryStatusActive    StoryStatus = "active"
+	StoryStatusCompleted StoryStatus = "completed"
+	StoryStatusArchived  StoryStatus = "archived"
+)
+
+type LayerStatus string
+
+const (
+	LayerStatusPending    LayerStatus = "pending"
+	LayerStatusInProgress LayerStatus = "in_progress"
+	LayerStatusReview     LayerStatus = "review"
+	LayerStatusMerged     LayerStatus = "merged"
+)
+
+type Story struct {
+	ID          string        `json:"id"`
+	Title       string        `json:"title"`
+	Description string        `json:"description"`
+	LayerChain  string        `json:"layer_chain"`
+	Status      StoryStatus   `json:"status"`
+	CreatedAt   time.Time     `json:"created_at"`
+	UpdatedAt   time.Time     `json:"updated_at"`
+	Layers      []*StoryLayer `json:"layers"`
+}
+
+type StoryLayer struct {
+	ID        string      `json:"id"`
+	StoryID   string      `json:"story_id"`
+	LayerName string      `json:"layer_name"`
+	Status    LayerStatus `json:"status"`
+	PRUrl     string      `json:"pr_url"`
+	PRNumber  int         `json:"pr_number"`
+	PRState   string      `json:"pr_state"`
+	SortOrder int         `json:"sort_order"`
+	CreatedAt time.Time   `json:"created_at"`
+	UpdatedAt time.Time   `json:"updated_at"`
+}

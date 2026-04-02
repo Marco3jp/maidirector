@@ -5,9 +5,9 @@
 
 ## Status
 
-- **現在のフェーズ**: Phase 1 (MVP) 全完了 → Phase 2 着手待ち
-- **直近の完了**: Phase 1 残作業（ベクトル化・UI改善・favicon・ベクトル削除）の実装 + 全項目の動作確認を完了し Phase 1 を閉じた
-- **次にやること**: Phase 2a 着手（ストーリー/レイヤーのデータモデル + CRUD + パイプラインビュー）
+- **現在のフェーズ**: Phase 2a 実装・動作確認完了 → Phase 2b 着手待ち
+- **直近の完了**: Phase 2a（ストーリー/レイヤーのデータモデル + CRUD + パイプラインビュー + Suggest統合）の実装と動作確認
+- **次にやること**: Phase 2b 着手（GitHub 連携 - gh コマンド）
 
 ## Roadmap
 
@@ -21,12 +21,13 @@
 ### Phase 2: 外部連携 + 構造的依存認識 ← 次
 - **完了条件**: PR URL を貼れば依存構造を認識し、「次にどのPRを見ればいいか」を自動提案できる
 
-#### Phase 2a: ストーリー/レイヤーのデータモデル + CRUD
+#### Phase 2a: ストーリー/レイヤーのデータモデル + CRUD ✅
 - SQLite に `stories` / `story_layers` テーブル追加（マイグレーション）
 - ストーリー CRUD API（`POST/GET/PUT/DELETE /api/stories`）
 - ストーリーにレイヤーを手動で追加・管理する API（`POST /api/stories/{id}/layers`）
+- レイヤーチェーン定義 API（`GET /api/layer-chains`）
 - ダッシュボードにストーリー一覧 + パイプラインビュー（各レイヤーの状態を横並び表示）
-- Suggest プロンプトにストーリー/レイヤー情報を組み込み
+- Suggest / Chat プロンプトにストーリー/レイヤー情報を組み込み
 
 #### Phase 2b: GitHub 連携（gh コマンド）
 - `internal/github` パッケージ: `os/exec` で `gh pr view` を呼ぶラッパー
@@ -78,7 +79,7 @@
 | Frontend | React + Vite + TypeScript | ダッシュボード SPA |
 | Chat LLM | Ollama / qwen2.5:14b (7b で検証済み) | 提案・チャットの推論 |
 | Embedding | Ollama / nomic-embed-text | テキスト → 768次元ベクトル変換 |
-| タスク管理DB | SQLite (modernc.org/sqlite) | タスク・会話・サマリーの CRUD (正規ストア) |
+| DB | SQLite (modernc.org/sqlite) | タスク・ストーリー・会話・サマリーの CRUD (正規ストア) |
 | セマンティック検索 | Qdrant v1.17.0 (既存Docker) | 過去の文脈をベクトル検索で引き出す記憶層 |
 | GitHub 連携 | gh CLI (os/exec経由) | PR状態取得、イベント駆動 (Phase 2) |
 | Config | YAML (gopkg.in/yaml.v3) | 設定ファイル |
@@ -129,24 +130,30 @@
 
 5. **ダッシュボード表示**: ストーリーごとのパイプラインビュー（各レイヤーの状態を横並びで表示）
 
-### データモデル拡張案
+### データモデル（実装済み）
 
 ```
 stories テーブル
-  - id, title, description, layer_chain (参照する依存チェーン名)
+  - id, title, description, layer_chain, status (active/completed/archived)
+  - created_at, updated_at
 
 story_layers テーブル
   - id, story_id, layer_name, status (pending/in_progress/review/merged)
   - pr_url, pr_number, pr_state
-  - blocked_by (上流layer_id)
+  - sort_order (レイヤーチェーン内の順序、ブロック判定に使用)
+  - created_at, updated_at
+  - FOREIGN KEY (story_id) → stories(id) ON DELETE CASCADE
 ```
 
-### 「次にやること」への統合
+ブロック判定は `blocked_by` カラムではなく `sort_order` を使い表示時に計算する方式を採用。直前のレイヤーが merged でなければブロック中と判定する。
 
-Suggest ロジックに組み込む:
-- 上流がマージ済みで下流が未着手 → 「ストーリーAのmicroserviceに取り掛かれます」
-- 上流がレビュー中 → 「ストーリーAのproto PRにレビューが必要です」
-- 全レイヤー完了 → 自動的にストーリーを完了扱い
+### 「次にやること」への統合（Phase 2a で部分実装済み）
+
+Suggest / Chat プロンプトにストーリー/レイヤー情報を注入済み:
+- ✅ アクティブなストーリーのパイプライン状況（各レイヤーのステータス + ブロック判定）をプロンプトに含める
+- ✅ 判断基準に「上流がマージ済みで下流が未着手の場合、着手を提案」を追加
+- Phase 2b 以降: PR の実際の状態を gh コマンドで取得してから判定
+- 将来: 全レイヤー完了時にストーリーを自動完了扱い
 
 ### GitHub 連携方針: gh コマンド + イベント駆動
 
@@ -182,7 +189,8 @@ gh pr list --repo <owner>/<repo> --search "label:story-a" --json number,title,ur
 
 ### 実装フェーズ
 
-Phase 2a でストーリー/レイヤーのデータモデルと手動 CRUD を先に実装し、Phase 2b で gh コマンド連携による PR 状態取得・自動ブロッキング判定を追加する。
+- ✅ Phase 2a: ストーリー/レイヤーのデータモデル・CRUD・パイプラインビュー・Suggest 統合を実装済み
+- Phase 2b: gh コマンド連携による PR 状態取得・自動ブロッキング判定を追加予定
 
 ## Known Issues / TODO
 
@@ -195,8 +203,11 @@ Phase 2a でストーリー/レイヤーのデータモデルと手動 CRUD を�
 ### 軽微な残課題 ✅
 - ~~タスク削除時の Qdrant クリーンアップ~~ → 実装済み（`DeletePoints` でタスク本体、`DeleteByFilter` で紐づく context_entry を削除）
 
-### Phase 2 で対応予定
-- → Roadmap の Phase 2a / 2b / 2c を参照
+### Phase 2a 実装済み ✅
+- ストーリー/レイヤーのデータモデル + CRUD + パイプラインビュー + Suggest統合
+
+### Phase 2b / 2c で対応予定
+- → Roadmap の Phase 2b / 2c を参照
 
 ### 将来の検討事項
 - Chrome SpeechRecognition API のブラウザ制限 (Phase 3)
@@ -250,3 +261,57 @@ Phase 2a でストーリー/レイヤーのデータモデルと手動 CRUD を�
   - タスク削除 → タスクベクトル + 紐づく context_entry ベクトルが削除、会話ベクトルは残留
   - UI 楽観的更新 → タスク追加ボタンが「追加中...」に変化（二重送信防止）、レスポンス後に即座にリスト反映
   - ベクトル化失敗時（Ollama停止中）→ タスクCRUD自体はブロックされず、warning ログのみ
+
+### 2026-04-02: Phase 2a - ストーリー/レイヤーのデータモデル + CRUD + パイプラインビュー
+- Config に `layer_chains` 設定を追加:
+  - `LayerChainConfig` 型（name + layers []string）を `config.go` に追加
+  - デフォルト設定に `default`（proto→microservice→gateway→frontend）と `simple`（backend→frontend）を定義
+  - `maidirector.yml` にも `layer_chains` セクションを追加
+- データモデル追加:
+  - `task/model.go` に `Story`（id, title, description, layer_chain, status）と `StoryLayer`（id, story_id, layer_name, status, pr_url, pr_number, pr_state, sort_order）を追加
+  - `StoryStatus`（active/completed/archived）、`LayerStatus`（pending/in_progress/review/merged）の型定義
+- SQLite マイグレーション追加:
+  - `stories` テーブル + `story_layers` テーブル（ON DELETE CASCADE）
+  - `idx_stories_status` / `idx_story_layers_story_id` インデックス
+- Store に Story/StoryLayer CRUD メソッドを実装:
+  - `CreateStory`/`GetStory`/`ListStories`/`UpdateStory`/`DeleteStory`
+  - `CreateStoryLayer`/`GetStoryLayer`/`ListStoryLayers`/`UpdateStoryLayer`/`DeleteStoryLayer`
+  - `GetStory`/`ListStories` はレイヤーを自動的に JOIN して返す
+  - レイヤー追加/更新/削除時に親ストーリーの `updated_at` を更新
+- `StoryStore` インターフェースと `StoryService` を `task/service.go` に追加
+- API ルートとハンドラを追加:
+  - `GET/POST /api/stories`, `GET/PUT/DELETE /api/stories/{id}`
+  - `POST /api/stories/{id}/layers`, `PUT/DELETE /api/stories/{storyId}/layers/{layerId}`
+  - `GET /api/layer-chains`（設定ファイルのレイヤーチェーン定義を返す）
+  - WebSocket で `story_created`/`story_updated`/`story_deleted` をブロードキャスト
+- フロントエンド実装:
+  - `types.ts` に `Story`/`StoryLayer`/`LayerChain`/`CreateStoryRequest`/`CreateLayerRequest` 型追加
+  - `client.ts` に Story CRUD + Layer CRUD + LayerChains 取得の API メソッド追加
+  - `StoryForm` コンポーネント: ストーリー作成フォーム（レイヤーチェーン選択付き）
+  - `StoryPipeline` コンポーネント: パイプラインビュー（レイヤー横並び表示、ステータス色分け、ブロック判定、レイヤー管理UI）
+  - `App.tsx` にタスク/ストーリー切替のナビゲーションタブを追加
+  - WebSocket で `story_*` イベント受信時にストーリー一覧を自動リフレッシュ
+- Suggest/Chat プロンプトにストーリー情報を統合:
+  - `ConversationStore` インターフェースに `ListStories` を追加
+  - `buildSuggestPrompt` でアクティブなストーリーのパイプライン状況をプロンプトに注入
+  - `buildChatPrompt` にもストーリー情報セクションを追加
+  - 判断基準に「上流がマージ済みで下流が未着手の場合、着手を提案」を追加
+  - `formatStories` でブロック状態を含むレイヤーサマリーを生成
+- コンパイル確認: Go build + TypeScript type check ともにエラーなし
+- 動作確認完了:
+  - サーバー起動 → stories / story_layers テーブルのマイグレーション成功
+  - ストーリー CRUD（curl）: POST 201 / GET 200 / PUT 200 / DELETE 204 すべて正常
+  - レイヤー CRUD（curl）: POST 201（sort_order 自動連番）/ PUT 200（status 変更+PR情報）/ DELETE 204
+  - GET /api/stories/{id} でレイヤーが sort_order 順に JOIN されて返ることを確認
+  - レイヤー追加/更新/削除時に親ストーリーの updated_at が更新されることを確認
+  - GET /api/layer-chains で config の layer_chain 定義が JSON で返ることを確認
+  - フロントエンドビルド: `tsc -b && vite build` 成功（25 modules, 64.77kB gzip）
+  - ブラウザ UI 確認:
+    - タスク/ストーリーのナビゲーションタブ切替が動作
+    - ストーリー作成フォーム: タイトル入力 → 「追加中...」→ カード表示（楽観的更新）
+    - レイヤー管理 UI: ⚙ボタンでレイヤーチェーン定義に基づくクイック追加ボタン表示
+    - パイプラインビュー: 4レイヤー（proto→microservice→gateway→frontend）が矢印で横並び表示
+    - ブロック判定: proto=未着手時に下流3レイヤーが「ブロック中」（破線+opacity低下）で表示
+    - ステータス変更: proto を「マージ済」に変更 → microservice のブロックが解除（正常判定）
+    - WebSocket によるストーリーのリアルタイム更新が動作
+- バグ修正: `LayerChainConfig` に JSON タグが欠如していた問題を修正（`Name`→`name`, `Layers`→`layers`）

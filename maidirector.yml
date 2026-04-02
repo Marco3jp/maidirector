@@ -13,3 +13,9 @@ store:
 qdrant:
   endpoint: http://localhost:6333
   collection: maidirector
+
+layer_chains:
+  - name: default
+    layers: [proto, microservice, gateway, frontend]
+  - name: simple
+    layers: [backend, frontend]

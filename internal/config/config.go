@@ -7,10 +7,16 @@ import (
 )
 
 type Config struct {
-	Server  ServerConfig  `yaml:"server"`
-	LLM     LLMConfig     `yaml:"llm"`
-	Store   StoreConfig   `yaml:"store"`
-	Qdrant  QdrantConfig  `yaml:"qdrant"`
+	Server      ServerConfig       `yaml:"server"`
+	LLM         LLMConfig          `yaml:"llm"`
+	Store       StoreConfig        `yaml:"store"`
+	Qdrant      QdrantConfig       `yaml:"qdrant"`
+	LayerChains []LayerChainConfig `yaml:"layer_chains"`
+}
+
+type LayerChainConfig struct {
+	Name   string   `yaml:"name" json:"name"`
+	Layers []string `yaml:"layers" json:"layers"`
 }
 
 type ServerConfig struct {
@@ -48,6 +54,10 @@ func DefaultConfig() *Config {
 		Qdrant: QdrantConfig{
 			Endpoint:   "http://localhost:6333",
 			Collection: "maidirector",
+		},
+		LayerChains: []LayerChainConfig{
+			{Name: "default", Layers: []string{"proto", "microservice", "gateway", "frontend"}},
+			{Name: "simple", Layers: []string{"backend", "frontend"}},
 		},
 	}
 }

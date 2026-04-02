@@ -1,4 +1,4 @@
-import type { Task, CreateTaskRequest, ContextEntry } from './types';
+import type { Task, CreateTaskRequest, ContextEntry, Story, CreateStoryRequest, StoryLayer, CreateLayerRequest, LayerChain } from './types';
 
 const BASE = '/api';
 
@@ -76,6 +76,45 @@ export const api = {
         }
       }
     }
+  },
+
+  listStories(status?: string): Promise<Story[]> {
+    const params = new URLSearchParams();
+    if (status) params.set('status', status);
+    const qs = params.toString();
+    return request(`/stories${qs ? `?${qs}` : ''}`);
+  },
+
+  getStory(id: string): Promise<Story> {
+    return request(`/stories/${id}`);
+  },
+
+  createStory(data: CreateStoryRequest): Promise<Story> {
+    return request('/stories', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  updateStory(id: string, data: Partial<Story>): Promise<Story> {
+    return request(`/stories/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  },
+
+  deleteStory(id: string): Promise<void> {
+    return request(`/stories/${id}`, { method: 'DELETE' });
+  },
+
+  addLayer(storyId: string, data: CreateLayerRequest): Promise<StoryLayer> {
+    return request(`/stories/${storyId}/layers`, { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  updateLayer(storyId: string, layerId: string, data: Partial<StoryLayer>): Promise<StoryLayer> {
+    return request(`/stories/${storyId}/layers/${layerId}`, { method: 'PUT', body: JSON.stringify(data) });
+  },
+
+  deleteLayer(storyId: string, layerId: string): Promise<void> {
+    return request(`/stories/${storyId}/layers/${layerId}`, { method: 'DELETE' });
+  },
+
+  getLayerChains(): Promise<LayerChain[]> {
+    return request('/layer-chains');
   },
 
   async *chatStream(message: string): AsyncGenerator<string> {
