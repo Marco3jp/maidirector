@@ -6,8 +6,8 @@
 ## Status
 
 - **現在のフェーズ**: Phase 1 (MVP) 全完了 → Phase 2 着手待ち
-- **直近の完了**: Phase 1 残作業（ベクトル化・UI改善・favicon）を実装し Phase 1 を完全に閉じた
-- **次にやること**: Phase 2 着手（gh コマンド連携、ストーリー/レイヤー依存グラフ、チャットからのタスク操作）
+- **直近の完了**: Phase 1 残作業（ベクトル化・UI改善・favicon・ベクトル削除）の実装 + 全項目の動作確認を完了し Phase 1 を閉じた
+- **次にやること**: Phase 2a 着手（ストーリー/レイヤーのデータモデル + CRUD + パイプラインビュー）
 
 ## Roadmap
 
@@ -19,13 +19,29 @@
 - **完了条件**: タスクを入れたら LLM がセマンティック検索で文脈を理解して次にやることを教えてくれる
 
 ### Phase 2: 外部連携 + 構造的依存認識 ← 次
-- **GitHub 連携 (gh コマンド経由、イベント駆動)**: Suggest/チャット時に PR 状態を取得
-- **レイヤー依存グラフ**: proto → microservice → gateway → frontend の構造的ブロッキング自動認識（後述）
-- **ストーリー管理**: 施策単位でレイヤーごとの PR 進捗をパイプラインビューで表示
-- **チャットからのタスク操作**: LLM tool use でタスクCRUD/ストーリー登録を会話から実行
+- **完了条件**: PR URL を貼れば依存構造を認識し、「次にどのPRを見ればいいか」を自動提案できる
+
+#### Phase 2a: ストーリー/レイヤーのデータモデル + CRUD
+- SQLite に `stories` / `story_layers` テーブル追加（マイグレーション）
+- ストーリー CRUD API（`POST/GET/PUT/DELETE /api/stories`）
+- ストーリーにレイヤーを手動で追加・管理する API（`POST /api/stories/{id}/layers`）
+- ダッシュボードにストーリー一覧 + パイプラインビュー（各レイヤーの状態を横並び表示）
+- Suggest プロンプトにストーリー/レイヤー情報を組み込み
+
+#### Phase 2b: GitHub 連携（gh コマンド）
+- `internal/github` パッケージ: `os/exec` で `gh pr view` を呼ぶラッパー
+- PR URL を story_layer に貼り付け → gh で PR 情報取得・表示
+- Suggest/チャット時にストーリーに紐づく PR の最新状態を gh で取得してからプロンプトに注入
+- 上流レイヤーの PR マージ状態による自動ブロッキング判定
+
+#### Phase 2c: チャットからのタスク操作
+- Ollama の tool use（function calling）サポート状況を検証
+- サポートが安定していれば: LLM tool use でタスク/ストーリー CRUD を会話から実行
+- フォールバック案: スラッシュコマンド方式（`/create タスク名`）をフロントエンド側でパース
+
+#### Phase 2 後回し（必要に応じて）
 - macOS デスクトップ通知 (osascript)
 - ローリングサマリーの自動化
-- **完了条件**: PR URL を貼れば依存構造を認識し、「次にどのPRを見ればいいか」を自動提案できる
 
 ### Phase 3: 音声 + 高度な機能
 - 音声入力 (Chrome SpeechRecognition API)
@@ -52,6 +68,7 @@
 - 2026-04-02: GitHub 連携に gh CLI コマンドを採用。ローカルに導入・認証済みのため OAuth トークン管理不要。Go から os/exec で呼ぶだけでプライベートリポジトリにもアクセス可能。
 - 2026-04-02: GitHub PR 状態取得はポーリングではなくイベント駆動を採用。Suggest 押下時・PR URL 貼付時・チャット質問時に都度 gh コマンドで取得。バックグラウンドプロセス不要。
 - 2026-04-02: ベクトル化の対象をタスク・コンテキスト・会話の3種に拡大。タスク/コンテキストは `api.Server` が `vectorStore` を直接保持して goroutine で非同期 upsert。会話は従来通り `context.Manager` 経由。`SourceID` が設定されたポイントはべき等更新（タスク更新時に同一ポイントIDで上書き）。
+- 2026-04-02: タスク削除時のベクトルクリーンアップを Qdrant REST API の `POST /points/delete` で実装。タスク本体は `DeletePoints`（ポイントID指定）、紐づく context_entry は `DeleteByFilter`（`task_id` フィルタ）の2段階で削除。会話ベクトルはタスクに紐づかないため削除対象外。
 
 ## Tech Stack
 
@@ -165,7 +182,7 @@ gh pr list --repo <owner>/<repo> --search "label:story-a" --json number,title,ur
 
 ### 実装フェーズ
 
-Phase 2 の GitHub 連携と同時に着手。まずは手動でストーリー/レイヤーを登録 + URL 貼付けから始め、gh コマンド連携で自動化を進める。
+Phase 2a でストーリー/レイヤーのデータモデルと手動 CRUD を先に実装し、Phase 2b で gh コマンド連携による PR 状態取得・自動ブロッキング判定を追加する。
 
 ## Known Issues / TODO
 
@@ -175,13 +192,11 @@ Phase 2 の GitHub 連携と同時に着手。まずは手動でストーリー/
 - ~~UI のリスト更新~~ → 楽観的更新に改善（作成レスポンスを即座に反映 + WebSocket重複抑制）
 - ~~favicon~~ → maidirector 用 SVG に差し替え
 
-### 軽微な残課題
-- タスク削除時に Qdrant のベクトルポイントが残る（`handleDeleteTask` で Qdrant 側の削除が未実装）
-- タスクに紐づく context_entry のベクトルもタスク削除時に残る（CASCADE 削除は SQLite のみ）
+### 軽微な残課題 ✅
+- ~~タスク削除時の Qdrant クリーンアップ~~ → 実装済み（`DeletePoints` でタスク本体、`DeleteByFilter` で紐づく context_entry を削除）
 
 ### Phase 2 で対応予定
-- チャットからのタスク操作（LLM tool use or フロントエンド側パース）
-- ローリングサマリーの自動化タイミング設計
+- → Roadmap の Phase 2a / 2b / 2c を参照
 
 ### 将来の検討事項
 - Chrome SpeechRecognition API のブラウザ制限 (Phase 3)
@@ -225,3 +240,13 @@ Phase 2 の GitHub 連携と同時に着手。まずは手動でストーリー/
   - WebSocket の `task_created` による重複リフレッシュを 500ms 間抑制
   - 送信中の二重送信防止（`submitting` state）を追加
 - favicon を maidirector 用の SVG に差し替え
+- タスク削除時の Qdrant ベクトルクリーンアップを実装:
+  - `vectorstore.DeletePoints`（ポイントID指定削除）と `vectorstore.DeleteByFilter`（フィルタ削除）を追加
+  - `handleDeleteTask` で goroutine により非同期でタスク本体 + 紐づく context_entry のベクトルを削除
+- 動作確認完了（サーバー起動 + 実際の Ollama/Qdrant 連携）:
+  - タスク作成 → Qdrant に `source_type: "task"` でベクトル保存、ポイントID = タスクID
+  - タスク更新 → 同一ポイントIDでべき等上書き（ポイント数が増えない）
+  - コンテキスト追加 → Qdrant に `source_type: "context_entry"` でベクトル保存、`task_id` 付き
+  - タスク削除 → タスクベクトル + 紐づく context_entry ベクトルが削除、会話ベクトルは残留
+  - UI 楽観的更新 → タスク追加ボタンが「追加中...」に変化（二重送信防止）、レスポンス後に即座にリスト反映
+  - ベクトル化失敗時（Ollama停止中）→ タスクCRUD自体はブロックされず、warning ログのみ

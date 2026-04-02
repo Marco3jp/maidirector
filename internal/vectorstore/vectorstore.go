@@ -176,6 +176,46 @@ func (vs *VectorStore) Search(ctx context.Context, query string, limit int, filt
 	return results, nil
 }
 
+func (vs *VectorStore) DeletePoints(pointIDs []string) error {
+	body := map[string]any{
+		"points": pointIDs,
+	}
+
+	data, _ := json.Marshal(body)
+	resp, err := vs.httpClient.Do(vs.newRequest("POST", "/collections/"+vs.collection+"/points/delete", data))
+	if err != nil {
+		return fmt.Errorf("delete points failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("delete points failed (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+func (vs *VectorStore) DeleteByFilter(filter map[string]any) error {
+	body := map[string]any{
+		"filter": filter,
+	}
+
+	data, _ := json.Marshal(body)
+	resp, err := vs.httpClient.Do(vs.newRequest("POST", "/collections/"+vs.collection+"/points/delete", data))
+	if err != nil {
+		return fmt.Errorf("delete by filter failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("delete by filter failed (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
 func (vs *VectorStore) newRequest(method, path string, body []byte) *http.Request {
 	req, _ := http.NewRequest(method, vs.endpoint+path, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

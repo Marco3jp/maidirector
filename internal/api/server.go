@@ -169,6 +169,8 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	go s.deleteTaskVectors(id)
+
 	s.wsHub.Broadcast(ws.Message{Type: "task_deleted", Payload: map[string]string{"id": id}})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -311,6 +313,21 @@ func (s *Server) vectorizeContextEntry(e *task.ContextEntry) {
 		CreatedAt:  e.CreatedAt.Format(time.RFC3339),
 	}); err != nil {
 		log.Printf("warning: failed to vectorize context entry %s: %v", e.ID, err)
+	}
+}
+
+func (s *Server) deleteTaskVectors(taskID string) {
+	if err := s.vectorStore.DeletePoints([]string{taskID}); err != nil {
+		log.Printf("warning: failed to delete task vector %s: %v", taskID, err)
+	}
+
+	filter := map[string]any{
+		"must": []map[string]any{
+			{"key": "task_id", "match": map[string]any{"value": taskID}},
+		},
+	}
+	if err := s.vectorStore.DeleteByFilter(filter); err != nil {
+		log.Printf("warning: failed to delete context vectors for task %s: %v", taskID, err)
 	}
 }
 
