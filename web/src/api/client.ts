@@ -113,6 +113,10 @@ export const api = {
     return request(`/stories/${storyId}/layers/${layerId}`, { method: 'DELETE' });
   },
 
+  refreshLayerPR(storyId: string, layerId: string): Promise<StoryLayer> {
+    return request(`/stories/${storyId}/layers/${layerId}/refresh-pr`, { method: 'POST' });
+  },
+
   getLayerChains(): Promise<LayerChain[]> {
     return request('/layer-chains');
   },

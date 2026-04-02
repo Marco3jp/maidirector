@@ -77,14 +77,16 @@ type Story struct {
 }
 
 type StoryLayer struct {
-	ID        string      `json:"id"`
-	StoryID   string      `json:"story_id"`
-	LayerName string      `json:"layer_name"`
-	Status    LayerStatus `json:"status"`
-	PRUrl     string      `json:"pr_url"`
-	PRNumber  int         `json:"pr_number"`
-	PRState   string      `json:"pr_state"`
-	SortOrder int         `json:"sort_order"`
-	CreatedAt time.Time   `json:"created_at"`
-	UpdatedAt time.Time   `json:"updated_at"`
+	ID               string      `json:"id"`
+	StoryID          string      `json:"story_id"`
+	LayerName        string      `json:"layer_name"`
+	Status           LayerStatus `json:"status"`
+	PRUrl            string      `json:"pr_url"`
+	PRNumber         int         `json:"pr_number"`
+	PRState          string      `json:"pr_state"`
+	PRTitle          string      `json:"pr_title"`
+	PRReviewDecision string      `json:"pr_review_decision"`
+	SortOrder        int         `json:"sort_order"`
+	CreatedAt        time.Time   `json:"created_at"`
+	UpdatedAt        time.Time   `json:"updated_at"`
 }

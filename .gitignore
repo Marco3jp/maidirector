@@ -3,3 +3,4 @@ cmd/maidirector/dist/
 web/dist/
 web/node_modules/
 *.db
+.dev-*.log

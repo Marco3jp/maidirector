@@ -11,6 +11,7 @@ import (
 
 	"github.com/Marco3jp/maidirector/internal/config"
 	"github.com/Marco3jp/maidirector/internal/context"
+	"github.com/Marco3jp/maidirector/internal/github"
 	"github.com/Marco3jp/maidirector/internal/llm"
 	"github.com/Marco3jp/maidirector/internal/task"
 	"github.com/Marco3jp/maidirector/internal/vectorstore"
@@ -24,11 +25,12 @@ type Server struct {
 	ctxMgr      *context.Manager
 	llmClient   llm.Provider
 	vectorStore *vectorstore.VectorStore
+	ghClient    *github.Client
 	wsHub       *ws.Hub
 	httpServer  *http.Server
 }
 
-func NewServer(cfg *config.Config, taskSvc *task.Service, storySvc *task.StoryService, ctxMgr *context.Manager, llmClient llm.Provider, vs *vectorstore.VectorStore, staticFS ...fs.FS) *Server {
+func NewServer(cfg *config.Config, taskSvc *task.Service, storySvc *task.StoryService, ctxMgr *context.Manager, llmClient llm.Provider, vs *vectorstore.VectorStore, ghClient *github.Client, staticFS ...fs.FS) *Server {
 	s := &Server{
 		cfg:         cfg,
 		taskSvc:     taskSvc,
@@ -36,6 +38,7 @@ func NewServer(cfg *config.Config, taskSvc *task.Service, storySvc *task.StorySe
 		ctxMgr:      ctxMgr,
 		llmClient:   llmClient,
 		vectorStore: vs,
+		ghClient:    ghClient,
 		wsHub:       ws.NewHub(),
 	}
 
@@ -57,6 +60,7 @@ func NewServer(cfg *config.Config, taskSvc *task.Service, storySvc *task.StorySe
 	mux.HandleFunc("POST /api/stories/{id}/layers", s.handleAddLayer)
 	mux.HandleFunc("PUT /api/stories/{storyId}/layers/{layerId}", s.handleUpdateLayer)
 	mux.HandleFunc("DELETE /api/stories/{storyId}/layers/{layerId}", s.handleDeleteLayer)
+	mux.HandleFunc("POST /api/stories/{storyId}/layers/{layerId}/refresh-pr", s.handleRefreshLayerPR)
 	mux.HandleFunc("GET /api/layer-chains", s.handleGetLayerChains)
 
 	mux.HandleFunc("POST /api/suggest", s.handleSuggest)
@@ -347,13 +351,21 @@ func (s *Server) handleUpdateLayer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	oldPRUrl := existing.PRUrl
+
 	existing.LayerName = updates.LayerName
 	existing.Status = updates.Status
 	existing.PRUrl = updates.PRUrl
 	existing.PRNumber = updates.PRNumber
 	existing.PRState = updates.PRState
+	existing.PRTitle = updates.PRTitle
+	existing.PRReviewDecision = updates.PRReviewDecision
 	if updates.SortOrder != 0 {
 		existing.SortOrder = updates.SortOrder
+	}
+
+	if existing.PRUrl != "" && existing.PRUrl != oldPRUrl && s.ghClient != nil {
+		s.applyPRInfo(existing)
 	}
 
 	if err := s.storySvc.UpdateLayer(existing); err != nil {
@@ -388,7 +400,78 @@ func (s *Server) handleGetLayerChains(w http.ResponseWriter, _ *http.Request) {
 
 // --- Suggest / Chat handlers ---
 
+func (s *Server) handleRefreshLayerPR(w http.ResponseWriter, r *http.Request) {
+	layerID := r.PathValue("layerId")
+	existing, err := s.storySvc.GetLayer(layerID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "layer not found")
+		return
+	}
+
+	if existing.PRUrl == "" {
+		writeError(w, http.StatusBadRequest, "layer has no PR URL")
+		return
+	}
+
+	if s.ghClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "GitHub CLI not available")
+		return
+	}
+
+	s.applyPRInfo(existing)
+
+	if err := s.storySvc.UpdateLayer(existing); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: map[string]string{"story_id": existing.StoryID}})
+	writeJSON(w, http.StatusOK, existing)
+}
+
+func (s *Server) applyPRInfo(layer *task.StoryLayer) {
+	if s.ghClient == nil || layer.PRUrl == "" {
+		return
+	}
+	info, err := s.ghClient.GetPRInfo(layer.PRUrl)
+	if err != nil {
+		log.Printf("warning: failed to fetch PR info for %s: %v", layer.PRUrl, err)
+		return
+	}
+	layer.PRNumber = info.Number
+	layer.PRState = info.State
+	layer.PRTitle = info.Title
+	layer.PRReviewDecision = info.ReviewDecision
+	if info.State == "MERGED" && layer.Status != task.LayerStatusMerged {
+		layer.Status = task.LayerStatusMerged
+	}
+}
+
+func (s *Server) refreshPRStates() {
+	if s.ghClient == nil {
+		return
+	}
+	stories, err := s.storySvc.List("active")
+	if err != nil {
+		log.Printf("warning: failed to list stories for PR refresh: %v", err)
+		return
+	}
+	for _, story := range stories {
+		for _, layer := range story.Layers {
+			if layer.PRUrl == "" {
+				continue
+			}
+			s.applyPRInfo(layer)
+			if err := s.storySvc.UpdateLayer(layer); err != nil {
+				log.Printf("warning: failed to update layer after PR refresh: %v", err)
+			}
+		}
+	}
+}
+
 func (s *Server) handleSuggest(w http.ResponseWriter, r *http.Request) {
+	s.refreshPRStates()
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -424,6 +507,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	s.refreshPRStates()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")

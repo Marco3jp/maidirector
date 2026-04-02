@@ -640,6 +640,20 @@ button:disabled {
   color: white;
 }
 
+.pipeline-pr-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 100%;
+}
+
+.pipeline-pr-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .pipeline-pr-link {
   font-size: 11px;
   color: var(--primary);
@@ -648,6 +662,109 @@ button:disabled {
 
 .pipeline-pr-link:hover {
   text-decoration: underline;
+}
+
+.btn-refresh {
+  font-size: 12px;
+  padding: 1px 4px;
+  opacity: 0.7;
+}
+
+.btn-refresh:hover {
+  opacity: 1;
+}
+
+.pipeline-pr-title {
+  font-size: 10px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+
+.pipeline-pr-state {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  text-transform: uppercase;
+}
+
+.pipeline-pr-state-open {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+}
+
+.pipeline-pr-state-merged {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+}
+
+.pipeline-pr-state-closed {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.pipeline-pr-review {
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.pipeline-pr-actions {
+  width: 100%;
+}
+
+.pipeline-pr-form {
+  display: flex;
+  gap: 3px;
+  width: 100%;
+}
+
+.pipeline-pr-form input {
+  flex: 1;
+  font-size: 10px;
+  padding: 3px 6px;
+  min-width: 0;
+}
+
+.pipeline-pr-form button {
+  font-size: 10px;
+  padding: 3px 6px;
+}
+
+.btn-cancel {
+  background: transparent;
+  color: var(--text-muted);
+  padding: 3px 4px;
+}
+
+.btn-cancel:hover {
+  color: var(--danger);
+  background: transparent;
+}
+
+.btn-add-pr {
+  font-size: 10px;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-add-pr:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(99, 102, 241, 0.05);
+}
+
+.layer-manage-pr {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: 8px;
 }
 
 .pipeline-status-select {

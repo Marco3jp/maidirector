@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Story, LayerChain, LayerStatus } from '../api/types';
+import type { Story, LayerChain, LayerStatus, StoryLayer } from '../api/types';
 import { api } from '../api/client';
 
 const LAYER_STATUS_LABELS: Record<LayerStatus, string> = {
@@ -14,6 +14,24 @@ const LAYER_STATUS_COLORS: Record<LayerStatus, string> = {
   in_progress: '#3b82f6',
   review: '#f59e0b',
   merged: '#22c55e',
+};
+
+const PR_STATE_LABELS: Record<string, string> = {
+  OPEN: 'Open',
+  CLOSED: 'Closed',
+  MERGED: 'Merged',
+};
+
+const REVIEW_LABELS: Record<string, string> = {
+  APPROVED: 'Approved',
+  CHANGES_REQUESTED: 'Changes Requested',
+  REVIEW_REQUIRED: 'Review Required',
+};
+
+const REVIEW_COLORS: Record<string, string> = {
+  APPROVED: '#22c55e',
+  CHANGES_REQUESTED: '#ef4444',
+  REVIEW_REQUIRED: '#f59e0b',
 };
 
 interface Props {
@@ -47,6 +65,26 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
       onRefresh();
     } catch (e) {
       console.error('Failed to update layer:', e);
+    }
+  };
+
+  const handleSetPRUrl = async (story: Story, layerId: string, prUrl: string) => {
+    try {
+      const layer = story.layers.find((l) => l.id === layerId);
+      if (!layer) return;
+      await api.updateLayer(story.id, layerId, { ...layer, pr_url: prUrl });
+      onRefresh();
+    } catch (e) {
+      console.error('Failed to set PR URL:', e);
+    }
+  };
+
+  const handleRefreshPR = async (storyId: string, layerId: string) => {
+    try {
+      await api.refreshLayerPR(storyId, layerId);
+      onRefresh();
+    } catch (e) {
+      console.error('Failed to refresh PR:', e);
     }
   };
 
@@ -127,48 +165,16 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
               {story.layers.map((layer, idx) => {
                 const blocked = isBlocked(story, idx);
                 return (
-                  <div
+                  <PipelineStage
                     key={layer.id}
-                    className={`pipeline-stage ${blocked ? 'pipeline-blocked' : ''}`}
-                  >
-                    <div className="pipeline-connector">
-                      {idx > 0 && <span className="pipeline-arrow">→</span>}
-                    </div>
-                    <div
-                      className="pipeline-card"
-                      style={{ borderTopColor: LAYER_STATUS_COLORS[layer.status] }}
-                    >
-                      <div className="pipeline-layer-name">{layer.layer_name}</div>
-                      <span
-                        className="pipeline-status"
-                        style={{ backgroundColor: LAYER_STATUS_COLORS[layer.status] }}
-                      >
-                        {blocked && layer.status !== 'merged' ? 'ブロック中' : LAYER_STATUS_LABELS[layer.status]}
-                      </span>
-                      {layer.pr_url && (
-                        <a
-                          href={layer.pr_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="pipeline-pr-link"
-                        >
-                          PR #{layer.pr_number || '?'}
-                        </a>
-                      )}
-                      <select
-                        className="pipeline-status-select"
-                        value={layer.status}
-                        onChange={(e) =>
-                          handleLayerStatusChange(story, layer.id, e.target.value as LayerStatus)
-                        }
-                      >
-                        <option value="pending">未着手</option>
-                        <option value="in_progress">作業中</option>
-                        <option value="review">レビュー中</option>
-                        <option value="merged">マージ済</option>
-                      </select>
-                    </div>
-                  </div>
+                    layer={layer}
+                    storyId={story.id}
+                    idx={idx}
+                    blocked={blocked}
+                    onStatusChange={(newStatus) => handleLayerStatusChange(story, layer.id, newStatus)}
+                    onSetPRUrl={(prUrl) => handleSetPRUrl(story, layer.id, prUrl)}
+                    onRefreshPR={() => handleRefreshPR(story.id, layer.id)}
+                  />
                 );
               })}
               {story.layers.length === 0 && (
@@ -187,6 +193,140 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function PipelineStage({
+  layer,
+  storyId,
+  idx,
+  blocked,
+  onStatusChange,
+  onSetPRUrl,
+  onRefreshPR,
+}: {
+  layer: StoryLayer;
+  storyId: string;
+  idx: number;
+  blocked: boolean;
+  onStatusChange: (status: LayerStatus) => void;
+  onSetPRUrl: (prUrl: string) => void;
+  onRefreshPR: () => void;
+}) {
+  const [showPRInput, setShowPRInput] = useState(false);
+  const [prUrlInput, setPrUrlInput] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handlePRSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!prUrlInput.trim()) return;
+    onSetPRUrl(prUrlInput.trim());
+    setPrUrlInput('');
+    setShowPRInput(false);
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await onRefreshPR();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  return (
+    <div className={`pipeline-stage ${blocked ? 'pipeline-blocked' : ''}`}>
+      <div className="pipeline-connector">
+        {idx > 0 && <span className="pipeline-arrow">→</span>}
+      </div>
+      <div
+        className="pipeline-card"
+        style={{ borderTopColor: LAYER_STATUS_COLORS[layer.status] }}
+      >
+        <div className="pipeline-layer-name">{layer.layer_name}</div>
+        <span
+          className="pipeline-status"
+          style={{ backgroundColor: LAYER_STATUS_COLORS[layer.status] }}
+        >
+          {blocked && layer.status !== 'merged' ? 'ブロック中' : LAYER_STATUS_LABELS[layer.status]}
+        </span>
+
+        {layer.pr_url ? (
+          <div className="pipeline-pr-info">
+            <div className="pipeline-pr-header">
+              <a
+                href={layer.pr_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="pipeline-pr-link"
+              >
+                PR #{layer.pr_number || '?'}
+              </a>
+              <button
+                className="btn-icon btn-refresh"
+                onClick={handleRefresh}
+                disabled={refreshing}
+                title="PR情報を更新"
+              >
+                {refreshing ? '...' : '↻'}
+              </button>
+            </div>
+            {layer.pr_title && (
+              <div className="pipeline-pr-title" title={layer.pr_title}>
+                {layer.pr_title.length > 30 ? layer.pr_title.slice(0, 30) + '…' : layer.pr_title}
+              </div>
+            )}
+            {layer.pr_state && (
+              <span className={`pipeline-pr-state pipeline-pr-state-${layer.pr_state.toLowerCase()}`}>
+                {PR_STATE_LABELS[layer.pr_state] || layer.pr_state}
+              </span>
+            )}
+            {layer.pr_review_decision && (
+              <span
+                className="pipeline-pr-review"
+                style={{ color: REVIEW_COLORS[layer.pr_review_decision] || 'var(--text-muted)' }}
+              >
+                {REVIEW_LABELS[layer.pr_review_decision] || layer.pr_review_decision}
+              </span>
+            )}
+          </div>
+        ) : (
+          <div className="pipeline-pr-actions">
+            {showPRInput ? (
+              <form className="pipeline-pr-form" onSubmit={handlePRSubmit}>
+                <input
+                  type="url"
+                  placeholder="PR URL..."
+                  value={prUrlInput}
+                  onChange={(e) => setPrUrlInput(e.target.value)}
+                  autoFocus
+                />
+                <button type="submit" disabled={!prUrlInput.trim()}>OK</button>
+                <button type="button" onClick={() => setShowPRInput(false)} className="btn-cancel">✕</button>
+              </form>
+            ) : (
+              <button
+                className="btn-add-pr"
+                onClick={() => setShowPRInput(true)}
+              >
+                + PR
+              </button>
+            )}
+          </div>
+        )}
+
+        <select
+          className="pipeline-status-select"
+          value={layer.status}
+          onChange={(e) => onStatusChange(e.target.value as LayerStatus)}
+        >
+          <option value="pending">未着手</option>
+          <option value="in_progress">作業中</option>
+          <option value="review">レビュー中</option>
+          <option value="merged">マージ済</option>
+        </select>
+      </div>
     </div>
   );
 }
@@ -246,6 +386,11 @@ function LayerManager({
           {story.layers.map((layer) => (
             <div key={layer.id} className="layer-manage-item">
               <span>{layer.layer_name}</span>
+              {layer.pr_url && (
+                <span className="layer-manage-pr">
+                  PR #{layer.pr_number || '?'} ({layer.pr_state || '未取得'})
+                </span>
+              )}
               <button
                 className="btn-icon btn-danger"
                 onClick={() => onDeleteLayer(story.id, layer.id)}

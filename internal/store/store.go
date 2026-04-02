@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Marco3jp/maidirector/internal/task"
@@ -111,10 +112,15 @@ func (s *Store) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_stories_status ON stories(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_story_layers_story_id ON story_layers(story_id)`,
+		`ALTER TABLE story_layers ADD COLUMN pr_title TEXT DEFAULT ''`,
+		`ALTER TABLE story_layers ADD COLUMN pr_review_decision TEXT DEFAULT ''`,
 	}
 
 	for _, m := range migrations {
 		if _, err := s.db.Exec(m); err != nil {
+			if strings.Contains(m, "ALTER TABLE") && strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
 			return fmt.Errorf("migration failed: %w\nSQL: %s", err, m)
 		}
 	}
@@ -417,9 +423,9 @@ func (s *Store) CreateStoryLayer(l *task.StoryLayer) error {
 	}
 
 	_, err := s.db.Exec(
-		`INSERT INTO story_layers (id, story_id, layer_name, status, pr_url, pr_number, pr_state, sort_order, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		l.ID, l.StoryID, l.LayerName, l.Status, l.PRUrl, l.PRNumber, l.PRState, l.SortOrder, l.CreatedAt, l.UpdatedAt,
+		`INSERT INTO story_layers (id, story_id, layer_name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, sort_order, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		l.ID, l.StoryID, l.LayerName, l.Status, l.PRUrl, l.PRNumber, l.PRState, l.PRTitle, l.PRReviewDecision, l.SortOrder, l.CreatedAt, l.UpdatedAt,
 	)
 	if err != nil {
 		return err
@@ -431,7 +437,7 @@ func (s *Store) CreateStoryLayer(l *task.StoryLayer) error {
 
 func (s *Store) ListStoryLayers(storyID string) ([]*task.StoryLayer, error) {
 	rows, err := s.db.Query(
-		`SELECT id, story_id, layer_name, status, pr_url, pr_number, pr_state, sort_order, created_at, updated_at
+		`SELECT id, story_id, layer_name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, sort_order, created_at, updated_at
 		 FROM story_layers WHERE story_id = ? ORDER BY sort_order ASC`, storyID,
 	)
 	if err != nil {
@@ -442,7 +448,7 @@ func (s *Store) ListStoryLayers(storyID string) ([]*task.StoryLayer, error) {
 	var layers []*task.StoryLayer
 	for rows.Next() {
 		l := &task.StoryLayer{}
-		if err := rows.Scan(&l.ID, &l.StoryID, &l.LayerName, &l.Status, &l.PRUrl, &l.PRNumber, &l.PRState, &l.SortOrder, &l.CreatedAt, &l.UpdatedAt); err != nil {
+		if err := rows.Scan(&l.ID, &l.StoryID, &l.LayerName, &l.Status, &l.PRUrl, &l.PRNumber, &l.PRState, &l.PRTitle, &l.PRReviewDecision, &l.SortOrder, &l.CreatedAt, &l.UpdatedAt); err != nil {
 			return nil, err
 		}
 		layers = append(layers, l)
@@ -456,8 +462,8 @@ func (s *Store) ListStoryLayers(storyID string) ([]*task.StoryLayer, error) {
 func (s *Store) UpdateStoryLayer(l *task.StoryLayer) error {
 	l.UpdatedAt = time.Now()
 	_, err := s.db.Exec(
-		`UPDATE story_layers SET layer_name=?, status=?, pr_url=?, pr_number=?, pr_state=?, sort_order=?, updated_at=? WHERE id=?`,
-		l.LayerName, l.Status, l.PRUrl, l.PRNumber, l.PRState, l.SortOrder, l.UpdatedAt, l.ID,
+		`UPDATE story_layers SET layer_name=?, status=?, pr_url=?, pr_number=?, pr_state=?, pr_title=?, pr_review_decision=?, sort_order=?, updated_at=? WHERE id=?`,
+		l.LayerName, l.Status, l.PRUrl, l.PRNumber, l.PRState, l.PRTitle, l.PRReviewDecision, l.SortOrder, l.UpdatedAt, l.ID,
 	)
 	if err != nil {
 		return err
@@ -484,11 +490,11 @@ func (s *Store) DeleteStoryLayer(id string) error {
 
 func (s *Store) GetStoryLayer(id string) (*task.StoryLayer, error) {
 	row := s.db.QueryRow(
-		`SELECT id, story_id, layer_name, status, pr_url, pr_number, pr_state, sort_order, created_at, updated_at
+		`SELECT id, story_id, layer_name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, sort_order, created_at, updated_at
 		 FROM story_layers WHERE id = ?`, id,
 	)
 	l := &task.StoryLayer{}
-	if err := row.Scan(&l.ID, &l.StoryID, &l.LayerName, &l.Status, &l.PRUrl, &l.PRNumber, &l.PRState, &l.SortOrder, &l.CreatedAt, &l.UpdatedAt); err != nil {
+	if err := row.Scan(&l.ID, &l.StoryID, &l.LayerName, &l.Status, &l.PRUrl, &l.PRNumber, &l.PRState, &l.PRTitle, &l.PRReviewDecision, &l.SortOrder, &l.CreatedAt, &l.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return l, nil

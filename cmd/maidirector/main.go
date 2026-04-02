@@ -10,6 +10,7 @@ import (
 	"github.com/Marco3jp/maidirector/internal/api"
 	"github.com/Marco3jp/maidirector/internal/config"
 	"github.com/Marco3jp/maidirector/internal/context"
+	"github.com/Marco3jp/maidirector/internal/github"
 	"github.com/Marco3jp/maidirector/internal/llm"
 	"github.com/Marco3jp/maidirector/internal/store"
 	"github.com/Marco3jp/maidirector/internal/task"
@@ -66,12 +67,20 @@ func runServe(cmd *cobra.Command, args []string) error {
 	storyService := task.NewStoryService(db)
 	ctxManager := context.NewManager(db, vs, llmClient)
 
+	ghClient := github.NewClient()
+	if ghClient.IsAvailable() {
+		log.Println("GitHub CLI (gh) 認証済み: PR連携が有効です")
+	} else {
+		log.Println("warning: GitHub CLI (gh) が未認証です。PR連携は無効になります")
+		ghClient = nil
+	}
+
 	staticFS, err := fs.Sub(embeddedFS, "dist")
 	if err != nil {
 		return fmt.Errorf("failed to load embedded frontend: %w", err)
 	}
 
-	server := api.NewServer(cfg, taskService, storyService, ctxManager, llmClient, vs, staticFS)
+	server := api.NewServer(cfg, taskService, storyService, ctxManager, llmClient, vs, ghClient, staticFS)
 
 	log.Printf("maidirector サーバー起動: http://localhost:%d", cfg.Server.Port)
 	return server.ListenAndServe()

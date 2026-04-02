@@ -297,7 +297,17 @@ func formatStories(stories []*task.Story) string {
 			}
 			prInfo := ""
 			if l.PRUrl != "" {
-				prInfo = fmt.Sprintf(" (PR: %s)", l.PRUrl)
+				prParts := []string{l.PRUrl}
+				if l.PRState != "" {
+					prParts = append(prParts, "state:"+l.PRState)
+				}
+				if l.PRReviewDecision != "" {
+					prParts = append(prParts, "review:"+l.PRReviewDecision)
+				}
+				if l.PRTitle != "" {
+					prParts = append(prParts, l.PRTitle)
+				}
+				prInfo = fmt.Sprintf(" (PR: %s)", strings.Join(prParts, ", "))
 			}
 			b.WriteString(fmt.Sprintf("  %d. %s: %s%s%s\n", i+1, l.LayerName, l.Status, blocked, prInfo))
 		}
@@ -312,10 +322,12 @@ func buildSuggestSystemPrompt(taskSummary, storySummary, relatedContext, globalS
 
 ## 判断基準
 1. ブロッカーの解消が最優先
-2. ストーリーのパイプラインで上流がマージ済みなのに下流が未着手の場合、着手を提案
-3. 進行中のタスクの完了を優先
-4. 優先度の高いタスクを優先
-5. 長時間放置されているタスクに注意を促す
+2. ストーリーのパイプラインで上流PRがマージ済みなのに下流が未着手の場合、着手を提案
+3. PRのレビューステータスがAPPROVEDで未マージの場合、マージを促す
+4. PRがCHANGES_REQUESTEDの場合、修正対応を促す
+5. 進行中のタスクの完了を優先
+6. 優先度の高いタスクを優先
+7. 長時間放置されているタスクに注意を促す
 
 ## 現在のタスク一覧
 `)

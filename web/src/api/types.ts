@@ -58,6 +58,8 @@ export interface StoryLayer {
   pr_url: string;
   pr_number: number;
   pr_state: string;
+  pr_title: string;
+  pr_review_decision: string;
   sort_order: number;
   created_at: string;
   updated_at: string;

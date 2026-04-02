@@ -5,9 +5,9 @@
 
 ## Status
 
-- **現在のフェーズ**: Phase 2a 実装・動作確認完了 → Phase 2b 着手待ち
-- **直近の完了**: Phase 2a（ストーリー/レイヤーのデータモデル + CRUD + パイプラインビュー + Suggest統合）の実装と動作確認
-- **次にやること**: Phase 2b 着手（GitHub 連携 - gh コマンド）
+- **現在のフェーズ**: Phase 2b 実装・動作確認完了 → Phase 2c 着手待ち
+- **直近の完了**: Phase 2b（GitHub 連携 - gh コマンドによる PR 状態取得・自動ブロッキング判定）の実装と動作確認
+- **次にやること**: Phase 2c 着手（チャットからのタスク操作）
 
 ## Roadmap
 
@@ -29,7 +29,7 @@
 - ダッシュボードにストーリー一覧 + パイプラインビュー（各レイヤーの状態を横並び表示）
 - Suggest / Chat プロンプトにストーリー/レイヤー情報を組み込み
 
-#### Phase 2b: GitHub 連携（gh コマンド）
+#### Phase 2b: GitHub 連携（gh コマンド） ✅
 - `internal/github` パッケージ: `os/exec` で `gh pr view` を呼ぶラッパー
 - PR URL を story_layer に貼り付け → gh で PR 情報取得・表示
 - Suggest/チャット時にストーリーに紐づく PR の最新状態を gh で取得してからプロンプトに注入
@@ -190,7 +190,7 @@ gh pr list --repo <owner>/<repo> --search "label:story-a" --json number,title,ur
 ### 実装フェーズ
 
 - ✅ Phase 2a: ストーリー/レイヤーのデータモデル・CRUD・パイプラインビュー・Suggest 統合を実装済み
-- Phase 2b: gh コマンド連携による PR 状態取得・自動ブロッキング判定を追加予定
+- ✅ Phase 2b: gh コマンド連携による PR 状態取得・自動ブロッキング判定を実装済み
 
 ## Known Issues / TODO
 
@@ -206,8 +206,11 @@ gh pr list --repo <owner>/<repo> --search "label:story-a" --json number,title,ur
 ### Phase 2a 実装済み ✅
 - ストーリー/レイヤーのデータモデル + CRUD + パイプラインビュー + Suggest統合
 
-### Phase 2b / 2c で対応予定
-- → Roadmap の Phase 2b / 2c を参照
+### Phase 2b 実装済み ✅
+- GitHub 連携（gh コマンドによる PR 状態取得・自動ブロッキング判定）
+
+### Phase 2c で対応予定
+- → Roadmap の Phase 2c を参照
 
 ### 将来の検討事項
 - Chrome SpeechRecognition API のブラウザ制限 (Phase 3)
@@ -315,3 +318,46 @@ gh pr list --repo <owner>/<repo> --search "label:story-a" --json number,title,ur
     - ステータス変更: proto を「マージ済」に変更 → microservice のブロックが解除（正常判定）
     - WebSocket によるストーリーのリアルタイム更新が動作
 - バグ修正: `LayerChainConfig` に JSON タグが欠如していた問題を修正（`Name`→`name`, `Layers`→`layers`）
+
+### 2026-04-02: Phase 2b - GitHub 連携（gh コマンド）
+- `internal/github` パッケージ新規作成:
+  - `Client` 構造体: `gh pr view <url> --json ...` を `os/exec` で実行するラッパー
+  - `GetPRInfo(prURL)`: PR の number, title, state, mergeable, reviewDecision, url を取得
+  - `IsAvailable()`: gh CLI の認証状態を確認（サーバー起動時に利用可能性をチェック）
+  - `ParsePRURL()`: GitHub PR URL から owner/repo/number を抽出するユーティリティ
+- データモデル拡張:
+  - `StoryLayer` に `PRTitle` / `PRReviewDecision` フィールドを追加
+  - SQLite マイグレーション: `ALTER TABLE story_layers ADD COLUMN pr_title/pr_review_decision`
+  - ALTER TABLE の「duplicate column」エラーをスキップする安全なマイグレーション処理
+  - Store の全 StoryLayer CRUD クエリ（INSERT/SELECT/UPDATE）を新カラム対応に更新
+- API 拡張:
+  - `Server` 構造体に `ghClient *github.Client` を追加、`NewServer` の引数に追加
+  - `handleUpdateLayer`: PR URL が新規設定・変更された場合、`applyPRInfo` で gh コマンドを呼び PR 情報を自動取得
+  - `POST /api/stories/{storyId}/layers/{layerId}/refresh-pr`: 個別レイヤーの PR 情報を手動リフレッシュ
+  - `applyPRInfo`: gh から取得した PR 情報を layer に適用、PR state が MERGED なら layer status も自動で merged に更新
+  - `refreshPRStates`: 全アクティブストーリーの PR 紐付きレイヤーを一括リフレッシュ
+  - `handleSuggest` / `handleChat`: 実行前に `refreshPRStates` を呼び出し、最新の PR 状態をプロンプトに反映
+- Suggest/Chat プロンプト強化:
+  - `formatStories` で PR の state, reviewDecision, title をプロンプトに含める
+  - 判断基準に「PRのレビューステータスがAPPROVEDで未マージならマージを促す」「CHANGES_REQUESTEDなら修正対応を促す」を追加
+- DI 統合:
+  - `main.go` で `github.NewClient()` を生成、`IsAvailable()` で認証状態をチェック
+  - 未認証の場合は nil を渡して PR 連携を無効化（タスク/ストーリー CRUD は影響なし）
+- フロントエンド実装:
+  - `StoryLayer` 型に `pr_title`, `pr_review_decision` を追加
+  - `api.refreshLayerPR()` メソッドを追加
+  - `StoryPipeline` コンポーネントを大幅強化:
+    - `PipelineStage` サブコンポーネントに分離
+    - PR URL 入力フォーム（「+ PR」ボタン → URL入力 → OK で保存）
+    - PR 情報表示: PR番号リンク、タイトル、state バッジ（OPEN/MERGED/CLOSED 色分け）、reviewDecision
+    - ↻ ボタンで PR 情報を個別リフレッシュ
+    - LayerManager に PR 状態のサマリー表示を追加
+  - CSS 追加: PR 情報表示用スタイル（state バッジ色分け、review 色分け、PR フォーム等）
+- コンパイル確認: Go build + TypeScript type check ともにエラーなし
+- 動作確認完了:
+  - サーバー起動 → 「GitHub CLI (gh) 認証済み: PR連携が有効です」ログ確認
+  - レイヤー更新で PR URL 設定 → gh 自動呼び出し: pr_number=2003, pr_state="OPEN", pr_title, pr_review_decision="REVIEW_REQUIRED" が取得・保存されることを確認
+  - 存在しない PR URL → warning ログのみでエラーにならないことを確認
+  - `POST .../refresh-pr` → 最新の PR 情報で更新されることを確認
+  - ストーリー GET → layers に新カラム（pr_title, pr_review_decision）が含まれることを確認
+  - フロントエンドビルド成功（11.04kB CSS, 210.80kB JS gzip 65.38kB）
