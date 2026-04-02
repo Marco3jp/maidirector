@@ -9,7 +9,10 @@ interface Props {
 export function StoryForm({ onCreated }: Props) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [layerChain, setLayerChain] = useState('default');
+  const [layerChain, setLayerChain] = useState('');
+  const [priority, setPriority] = useState(0);
+  const [project, setProject] = useState('');
+  const [tagsInput, setTagsInput] = useState('');
   const [chains, setChains] = useState<LayerChain[]>([]);
   const [expanded, setExpanded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -22,10 +25,17 @@ export function StoryForm({ onCreated }: Props) {
     e.preventDefault();
     if (!title.trim() || submitting) return;
 
+    const tags = tagsInput.trim()
+      ? tagsInput.split(',').map((t) => t.trim()).filter(Boolean)
+      : [];
+
     const data: CreateStoryRequest = {
       title: title.trim(),
       description: description.trim(),
-      layer_chain: layerChain,
+      layer_chain: layerChain || undefined,
+      priority: priority || undefined,
+      project: project.trim() || undefined,
+      tags: tags.length > 0 ? tags : undefined,
     };
 
     setSubmitting(true);
@@ -33,7 +43,10 @@ export function StoryForm({ onCreated }: Props) {
       const created = await api.createStory(data);
       setTitle('');
       setDescription('');
-      setLayerChain('default');
+      setLayerChain('');
+      setPriority(0);
+      setProject('');
+      setTagsInput('');
       setExpanded(false);
       onCreated(created);
     } catch (e) {
@@ -48,7 +61,7 @@ export function StoryForm({ onCreated }: Props) {
       <div className="task-form-main">
         <input
           type="text"
-          placeholder="新しいストーリーを追加..."
+          placeholder="新しいストーリー / タスクを追加..."
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onFocus={() => setExpanded(true)}
@@ -61,15 +74,41 @@ export function StoryForm({ onCreated }: Props) {
       {expanded && (
         <div className="task-form-details">
           <textarea
-            placeholder="ストーリーの説明（任意）"
+            placeholder="説明（任意）"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={2}
           />
           <div className="task-form-row">
+            <input
+              type="text"
+              placeholder="プロジェクト"
+              value={project}
+              onChange={(e) => setProject(e.target.value)}
+            />
+            <label>
+              優先度:
+              <select value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
+                <option value={0}>なし</option>
+                <option value={1}>P1 (最高)</option>
+                <option value={2}>P2</option>
+                <option value={3}>P3 (普通)</option>
+                <option value={4}>P4</option>
+                <option value={5}>P5 (低)</option>
+              </select>
+            </label>
+          </div>
+          <div className="task-form-row">
+            <input
+              type="text"
+              placeholder="タグ（カンマ区切り）"
+              value={tagsInput}
+              onChange={(e) => setTagsInput(e.target.value)}
+            />
             <label>
               レイヤーチェーン:
               <select value={layerChain} onChange={(e) => setLayerChain(e.target.value)}>
+                <option value="">なし（単タスク）</option>
                 {chains.map((c) => (
                   <option key={c.name} value={c.name}>
                     {c.name} ({c.layers.join(' → ')})

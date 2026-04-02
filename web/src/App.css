@@ -66,7 +66,7 @@ body {
 .panel {
   padding: 20px;
   overflow-y: auto;
-  height: calc(100vh - 97px);
+  height: calc(100vh - 57px);
 }
 
 .panel-tasks {
@@ -988,37 +988,30 @@ button:disabled {
   font-size: 12px;
 }
 
-/* Navigation tabs */
-.nav-tabs {
-  display: flex;
-  gap: 2px;
-  padding: 0 24px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-}
-
-.nav-tab {
-  padding: 10px 20px;
-  font-size: 13px;
+/* Story status badge */
+.story-status-badge {
+  font-size: 11px;
   font-weight: 600;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all 0.15s;
-  border-radius: 0;
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: white;
+  flex-shrink: 0;
 }
 
-.nav-tab:hover {
-  color: var(--text);
-  background: transparent;
+.story-footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  align-items: center;
 }
 
-.nav-tab.active {
-  color: var(--primary);
-  border-bottom-color: var(--primary);
-  background: transparent;
+.story-status-select {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.story-single-task .story-info {
+  flex-wrap: wrap;
 }
 
 @media (max-width: 900px) {

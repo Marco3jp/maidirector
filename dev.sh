@@ -145,13 +145,13 @@ else
   cd "$SCRIPT_DIR" && go run ./cmd/maidirector serve &>"$SCRIPT_DIR/.dev-backend.log" &
   sleep 3
   BACKEND_PID=$(lsof -ti:8080 2>/dev/null || true)
-  if curl -sf http://localhost:8080/api/tasks &>/dev/null; then
+  if curl -sf http://localhost:8080/api/stories &>/dev/null; then
     ok "バックエンド起動完了 (port 8080, PID: ${BACKEND_PID:-?})"
   else
     warn "バックエンドの起動を待機中..."
     sleep 3
     BACKEND_PID=$(lsof -ti:8080 2>/dev/null || true)
-    if curl -sf http://localhost:8080/api/tasks &>/dev/null; then
+    if curl -sf http://localhost:8080/api/stories &>/dev/null; then
       ok "バックエンド起動完了 (port 8080, PID: ${BACKEND_PID:-?})"
     else
       fail "バックエンドの起動に失敗しました"

@@ -5,9 +5,9 @@
 
 ## Status
 
-- **現在のフェーズ**: Phase 2b' 実装完了 → Phase 2.5（Task/Story 統合）着手待ち
-- **直近の完了**: Phase 2b'（GitHub 連携強化 - 一括リロード + CI ステータス + isDraft + UI ラベル/色体系のGitHub準拠化）
-- **次にやること**: Phase 2.5（Task/Story データモデル統合）→ Phase 2c（組織内PRスキャン）→ Phase 2d（チャットからのタスク操作）
+- **現在のフェーズ**: Phase 2.5 実装完了 → Phase 2c（組織内PRスキャン）着手待ち
+- **直近の完了**: Phase 2.5（Task/Story データモデル統合 - Task を Story に統合、UI 一本化、プロンプト統合）
+- **次にやること**: Phase 2c（組織内PRスキャン）→ Phase 2d（チャットからのタスク操作）
 
 ## Roadmap
 
@@ -32,10 +32,9 @@
 - ブロック表現はラベルに影響せず視覚のみ（opacity + dashed border）
 - マージ済みレイヤーのリフレッシュスキップ最適化
 
-#### Phase 2.5: Task/Story データモデル統合
+#### Phase 2.5: Task/Story データモデル統合 ✅
 - Task と Story を統合し、単一のデータモデル（Story）で単タスクも複数レイヤー施策も表現する
 - UI のタスク/ストーリータブを廃止し、統合ビューに一本化
-- 詳細は後述の「Phase 2.5 設計ドキュメント」セクションを参照
 
 #### Phase 2c: 組織内 PR スキャン → レビュータスク自動生成
 - `gh search prs --org <組織名> --state open --sort updated` で組織内のオープン PR を取得
@@ -154,9 +153,6 @@ gh pr view <url> --json number,title,state,isDraft,mergeable,reviewDecision,url,
 
 ## Known Issues / TODO
 
-### Phase 2.5 で対応予定
-- Task/Story データモデル統合（詳細は「Phase 2.5 設計ドキュメント」セクションを参照）
-
 ### Phase 2c で対応予定
 - 組織内 PR スキャン → レビュータスク自動生成（Phase 2.5 完了後に着手）
 
@@ -166,169 +162,6 @@ gh pr view <url> --json number,title,state,isDraft,mergeable,reviewDecision,url,
 ### 将来の検討事項
 - Chrome SpeechRecognition API のブラウザ制限 (Phase 3)
 - 全レイヤー完了時にストーリーを自動完了扱い
-
-## Phase 2.5 設計ドキュメント（引き継ぎ用・実装完了後に削除）
-
-> **注意**: このセクションは Phase 2.5 実装時の引き継ぎ用に詳細を記載している。実装完了後、セッション最後にこのセクション全体を削除すること。
-
-### 背景・動機
-
-現在 Task と Story が別のデータモデル・別の UI タブとして存在している。しかし:
-
-- LLM の Suggest/Chat では既に Task と Story を横断的に扱っている（`buildSuggestPrompt`/`buildChatPrompt` で両方取得してプロンプトに注入）
-- ユーザーから見ると「やるべきこと」を2箇所で管理するのは認知負荷が高い
-- Phase 2c（チャットからの操作）で操作対象が Task と Story の2系統あると tool use の設計が複雑化する
-
-→ Story にデータモデルを統合し、単タスク = レイヤー0個のストーリーとして扱うことで UI とバックエンドをシンプルにする。
-
-### 方針: Story 側に寄せる
-
-Task を Story の特殊ケース（レイヤー0〜1個のストーリー）として統合する。
-
-**理由**: Story の方が表現力が高い（レイヤー依存・PR連携・CI連携を既に持っている）。Task の各フィールドは Story に自然にマッピングできる。
-
-### 現行 Task フィールドの統合マッピング
-
-```
-Task.Title        → Story.Title
-Task.Description  → Story.Description
-Task.Status       → Story.Status（型の統合が必要、後述）
-Task.Priority     → Story に priority フィールドを新設
-Task.Project      → Story に project フィールドを新設
-Task.Links        → Story に links フィールドを新設（JSON TEXT）
-Task.Tags         → Story に tags フィールドを新設（JSON TEXT）
-Task.BlockedBy    → 廃止。Story 内のレイヤー依存（sort_order）で表現
-Task.LastActiveAt → Story に last_active_at フィールドを新設
-ContextEntry      → task_id を story_id に変更
-```
-
-### ステータス体系の統合
-
-現在の2つの体系を統合する必要がある:
-
-```
-Task:  todo / in_progress / blocked / done
-Story: active / completed / archived
-Layer: pending / in_progress / review / merged
-```
-
-統合案:
-- Story レベルのステータスは **active / completed / archived** を維持（これが一覧のフィルタに使われる）
-- 旧 Task の `todo` → active な Story（レイヤーが全て pending）
-- 旧 Task の `in_progress` → active な Story（レイヤーが in_progress）
-- 旧 Task の `blocked` → UI 上のブロック表現で代替（sort_order ベースの自動判定が既にある）
-- 旧 Task の `done` → completed な Story（全レイヤー merged、または手動で completed に変更）
-
-### DB マイグレーション方針
-
-**新規テーブルは作らない**。既存の `stories` テーブルにカラムを追加する:
-
-```sql
-ALTER TABLE stories ADD COLUMN priority INTEGER DEFAULT 0;
-ALTER TABLE stories ADD COLUMN project TEXT DEFAULT '';
-ALTER TABLE stories ADD COLUMN links TEXT DEFAULT '[]';
-ALTER TABLE stories ADD COLUMN tags TEXT DEFAULT '[]';
-ALTER TABLE stories ADD COLUMN last_active_at DATETIME;
-```
-
-旧 `tasks` テーブルのデータは以下の手順で移行:
-1. 各 Task を Story として INSERT
-2. Task に PR 情報はないので、レイヤーは作成しない（レイヤー0個の Story = 単タスク）
-3. `context_entries` テーブルの `task_id` を `story_id` にリネーム（`ALTER TABLE context_entries RENAME COLUMN task_id TO story_id`）
-4. 移行完了後、`tasks` テーブルは DROP（または残しておいてもよい）
-
-### ベクトル化の変更
-
-現在 Task 単位で Qdrant に upsert している箇所を Story 単位に変更:
-- `api.Server.handleCreateTask` → `handleCreateStory` に統合
-- `source_type: "task"` → `source_type: "story"` に変更
-- `SourceID` は Story.ID を使用
-- ContextEntry のベクトル化は `task_id` → `story_id` に変更するだけ
-- 削除時のクリーンアップも同様
-
-### API の変更
-
-Task 系の API を廃止し、Story 系に統合:
-
-```
-廃止:
-  GET/POST /api/tasks
-  GET/PUT/DELETE /api/tasks/{id}
-  POST/GET /api/tasks/{id}/context
-
-統合後（既存 Story API を拡張）:
-  GET/POST /api/stories               ← 既存（priority, project, tags, links を追加）
-  GET/PUT/DELETE /api/stories/{id}     ← 既存
-  POST /api/stories/{id}/layers        ← 既存
-  PUT/DELETE /api/stories/{storyId}/layers/{layerId} ← 既存
-  POST/GET /api/stories/{id}/context   ← 新規（旧 tasks/{id}/context を移行）
-  POST /api/stories/refresh-prs        ← 既存
-  POST /api/stories/{storyId}/layers/{layerId}/refresh-pr ← 既存
-```
-
-### フロントエンド UI の変更
-
-**廃止するもの:**
-- `nav-tabs`（タスク/ストーリー切替タブ）
-- `TaskList` コンポーネント
-- `TaskForm` コンポーネント
-- `App.tsx` の `mainView` state と切替ロジック
-
-**統合ビューの設計:**
-- 左パネルにストーリー一覧を表示（旧 Task も含む）
-- 単タスク（レイヤー0個）: タイトル + ステータスバッジのみ表示（パイプラインなし）
-- 複数レイヤー: 現在のパイプラインビューをそのまま表示
-- 作成フォーム: StoryForm を拡張。レイヤーチェーン未選択 = 単タスク扱い
-- フィルタ: project / tags / status でフィルタリング（旧 TaskList のフィルタバーを統合）
-- priority の表示: ストーリーカード上に表示（ソート順にも使用）
-
-### プロンプト生成の変更
-
-`context/manager.go` の変更:
-- `filterActiveTasks` + `formatTasks` を廃止
-- `formatStories` に priority/project/tags 情報を追加
-- `buildSuggestPrompt` / `buildChatPrompt` から Task 取得ロジックを削除し、Story のみに統一
-- `buildSuggestSystemPrompt` のタスク一覧セクションをストーリー一覧セクションに変更
-
-### 実装順序（推奨）
-
-1. **バックエンド: Story モデル拡張 + DB マイグレーション**
-   - `model.go`: Story 構造体に priority/project/links/tags/last_active_at を追加
-   - `store.go`: マイグレーション追加、Story CRUD クエリを新カラム対応に更新
-   - `store.go`: ContextEntry の story_id 対応（旧 task_id からの移行）
-
-2. **バックエンド: Task → Story データ移行**
-   - `store.go`: マイグレーション内で tasks テーブルのデータを stories に移行するロジック
-   - 移行は起動時マイグレーションで自動実行（tasks テーブルが存在する場合のみ）
-
-3. **バックエンド: API 統合**
-   - Task 系ハンドラを削除、Story ハンドラに context エンドポイントを追加
-   - ベクトル化ロジックを Story ベースに変更
-
-4. **バックエンド: プロンプト生成の統合**
-   - `context/manager.go`: Task 関連ロジックを削除、Story のみに統一
-
-5. **フロントエンド: 型定義 + API クライアント**
-   - `types.ts`: Task 型を削除、Story 型に新フィールド追加
-   - `client.ts`: Task 系メソッドを削除、Story 系メソッドに context を追加
-
-6. **フロントエンド: 統合ビュー**
-   - `App.tsx`: タブ切替を廃止、統合ビューに変更
-   - `StoryPipeline.tsx`: 単タスク（レイヤー0個）の表示対応を追加
-   - `TaskList.tsx`, `TaskForm.tsx`: 削除
-   - `StoryForm.tsx`: priority/project/tags 入力を追加
-
-7. **動作確認 + クリーンアップ**
-   - 既存データの移行確認
-   - 全 UI フローの確認
-   - 不要コードの削除
-
-### 注意事項
-
-- `tasks` テーブルに既存データがある場合の移行を安全に行う（マイグレーション内で `SELECT * FROM tasks` → `INSERT INTO stories` のバッチ処理）
-- `context_entries.task_id` → `story_id` のリネームは SQLite では `ALTER TABLE RENAME COLUMN` が使える（SQLite 3.25.0+、modernc.org/sqlite は対応済み）
-- WebSocket イベントの `task_*` 系を廃止し `story_*` 系に統一
-- Qdrant の既存ベクトル（`source_type: "task"`）は、検索時に `source_type` でフィルタしていなければそのまま残しても問題ない。気になるなら移行時に `source_type` を書き換える
 
 ## Session Log
 
@@ -369,3 +202,28 @@ Task 系の API を廃止し、Story 系に統合:
 - フロントエンド: PR ラベル GitHub 準拠化（マージ済み:紫/オープン:緑/ドラフト:灰/未着手:灰）、CI 表示（✓/✗/⏳）、「↻ 全PR情報を更新」ボタン
 - LLM プロンプト: draft/ci 情報追加、CI FAILURE/PENDING の判断基準追加
 - コンパイル確認: Go build + TypeScript type check エラーなし
+
+### 2026-04-02: Phase 2.5 - Task/Story データモデル統合
+- Task と Story を統合。単タスク = レイヤー0個の Story として表現
+- バックエンド:
+  - `model.go`: Task 型・ステータス定数を削除、Story に priority/project/links/tags/last_active_at を追加、ContextEntry の task_id → story_id 変更
+  - `store.go`: stories テーブルにカラム追加マイグレーション、tasks → stories 自動データ移行（起動時）、context_entries.task_id → story_id リネーム、tasks テーブル DROP、Story CRUD を新カラム対応に更新、scanStoryRow ヘルパー追加、CreateStory で links/tags nil → 空配列デフォルト
+  - `service.go`: TaskStore/Service を削除、StoryStore に CreateContextEntry/ListContextEntries を追加
+  - `server.go`: Task 系 API エンドポイント・ハンドラを全削除、Story 系に context エンドポイント追加（POST/GET /api/stories/{id}/context）、ベクトル化を story ベースに変更（source_type: "story"）、deleteStoryVectors でコンテキストベクトルも削除
+  - `vectorstore.go`: PointPayload の TaskID → StoryID 変更
+  - `context/manager.go`: ConversationStore から ListTasks 削除、filterActiveTasks/formatTasks/buildRecentActivityQuery を Story ベースに統合、buildSuggestPrompt/buildChatPrompt を Story のみに統一、formatStories に priority/project/tags 情報追加
+  - `main.go`: taskService を削除、NewServer シグネチャ更新
+  - `dev.sh`: ヘルスチェック URL を `/api/tasks` → `/api/stories` に修正
+- フロントエンド:
+  - `types.ts`: Task 型を削除、Story に priority/project/links/tags/last_active_at 追加、ContextEntry を story_id に変更
+  - `client.ts`: Task 系メソッドを全削除、addContext/listContext を stories/{id}/context に変更
+  - `App.tsx`: タスク/ストーリータブ切替を廃止、統合ビューに一本化（active/completed/archived フィルタ）
+  - `StoryPipeline.tsx`: 単タスク（レイヤー0個）表示対応、ステータス変更セレクト、コンテキスト入力統合、priority/project/tags 表示
+  - `StoryForm.tsx`: priority/project/tags 入力追加、レイヤーチェーン未選択=単タスク扱い
+  - `TaskList.tsx`, `TaskForm.tsx`: 削除
+  - `App.css`: nav-tabs スタイル削除、story-status-badge/story-footer/story-status-select 追加
+- 動作確認:
+  - コンパイル確認: Go build + TypeScript type check エラーなし
+  - API 確認: Story CRUD（作成・取得・更新・削除）、Context 追加・一覧、ステータスフィルタ → 全 OK。links が null 返却されるバグ発見 → CreateStory で nil → `[]` デフォルト設定して修正
+  - ブラウザ UI 確認: 統合ビュー（タブなし）、既存レイヤーストーリー表示（パイプライン・PR情報・CI状態）、単タスク作成・表示、ステータス変更（active→completed、完了セクション折りたたみ移動）、削除 → 全 OK
+- AGENTS.md: 作業完了の定義を明文化（検証ステップ → DEVELOPMENT.md 更新の順序を厳格化）

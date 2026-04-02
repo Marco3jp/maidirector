@@ -16,7 +16,6 @@ type ConversationStore interface {
 	ListRecentConversations(limit int) ([]*task.Conversation, error)
 	GetLatestSummary(scope string) (*task.Summary, error)
 	CreateSummary(s *task.Summary) error
-	ListTasks(status string, project string) ([]*task.Task, error)
 	ListStories(status string) ([]*task.Story, error)
 }
 
@@ -134,20 +133,13 @@ func (m *Manager) ChatStream(ctx gocontext.Context, userMessage string, onChunk 
 }
 
 func (m *Manager) buildSuggestPrompt(ctx gocontext.Context) ([]llm.ChatMessage, error) {
-	tasks, err := m.store.ListTasks("", "")
-	if err != nil {
-		return nil, err
-	}
-
-	activeTasks := filterActiveTasks(tasks)
-	taskSummary := formatTasks(activeTasks)
-
-	stories, _ := m.store.ListStories("active")
+	stories, _ := m.store.ListStories("")
 	storySummary := formatStories(stories)
 
 	var relatedContext string
-	if len(activeTasks) > 0 {
-		query := buildRecentActivityQuery(activeTasks)
+	activeStories := filterActiveStories(stories)
+	if len(activeStories) > 0 {
+		query := buildRecentActivityQuery(activeStories)
 		results, err := m.vectorStore.Search(ctx, query, 10, nil)
 		if err == nil && len(results) > 0 {
 			relatedContext = formatSearchResults(results)
@@ -160,7 +152,7 @@ func (m *Manager) buildSuggestPrompt(ctx gocontext.Context) ([]llm.ChatMessage, 
 		summaryText = globalSummary.Content
 	}
 
-	systemPrompt := buildSuggestSystemPrompt(taskSummary, storySummary, relatedContext, summaryText)
+	systemPrompt := buildSuggestSystemPrompt(storySummary, relatedContext, summaryText)
 
 	return []llm.ChatMessage{
 		{Role: "system", Content: systemPrompt},
@@ -177,28 +169,19 @@ func (m *Manager) buildChatPrompt(ctx gocontext.Context, userMessage string) ([]
 		relatedContext = formatSearchResults(results)
 	}
 
-	tasks, _ := m.store.ListTasks("", "")
-	activeTasks := filterActiveTasks(tasks)
-	taskSummary := formatTasks(activeTasks)
-
-	stories, _ := m.store.ListStories("active")
+	stories, _ := m.store.ListStories("")
 	storySummary := formatStories(stories)
-
-	var storySection string
-	if storySummary != "" {
-		storySection = fmt.Sprintf("\n## ストーリー（施策）のパイプライン状況\n%s", storySummary)
-	}
 
 	systemPrompt := fmt.Sprintf(`あなたは「maidirector」、開発者の作業を支援するAIアシスタントです。
 タスクの状況を把握し、的確なアドバイスを提供してください。
 
-## 現在のタスク一覧
+## 現在のストーリー一覧
 %s
-%s
+
 ## 関連する過去の文脈
 %s
 
-回答は簡潔かつ具体的にお願いします。`, taskSummary, storySection, relatedContext)
+回答は簡潔かつ具体的にお願いします。`, storySummary, relatedContext)
 
 	messages := []llm.ChatMessage{{Role: "system", Content: systemPrompt}}
 
@@ -213,36 +196,14 @@ func (m *Manager) buildChatPrompt(ctx gocontext.Context, userMessage string) ([]
 	return messages, nil
 }
 
-func filterActiveTasks(tasks []*task.Task) []*task.Task {
-	var active []*task.Task
-	for _, t := range tasks {
-		if t.Status != task.StatusDone {
-			active = append(active, t)
+func filterActiveStories(stories []*task.Story) []*task.Story {
+	var active []*task.Story
+	for _, s := range stories {
+		if s.Status == task.StoryStatusActive {
+			active = append(active, s)
 		}
 	}
 	return active
-}
-
-func formatTasks(tasks []*task.Task) string {
-	if len(tasks) == 0 {
-		return "（タスクなし）"
-	}
-
-	var b strings.Builder
-	for _, t := range tasks {
-		b.WriteString(fmt.Sprintf("- [%s] P%d: %s", t.Status, t.Priority, t.Title))
-		if t.Project != "" {
-			b.WriteString(fmt.Sprintf(" (project: %s)", t.Project))
-		}
-		if t.Description != "" {
-			b.WriteString(fmt.Sprintf("\n  %s", t.Description))
-		}
-		if len(t.BlockedBy) > 0 {
-			b.WriteString(fmt.Sprintf("\n  blocked by: %s", strings.Join(t.BlockedBy, ", ")))
-		}
-		b.WriteString("\n")
-	}
-	return b.String()
 }
 
 func formatSearchResults(results []vectorstore.SearchResult) string {
@@ -257,37 +218,46 @@ func formatSearchResults(results []vectorstore.SearchResult) string {
 	return b.String()
 }
 
-func buildRecentActivityQuery(tasks []*task.Task) string {
+func buildRecentActivityQuery(stories []*task.Story) string {
 	var titles []string
-	for _, t := range tasks {
-		if t.Status == task.StatusInProgress {
-			titles = append(titles, t.Title)
+	for i, s := range stories {
+		if i >= 5 {
+			break
 		}
-	}
-	if len(titles) == 0 {
-		for i, t := range tasks {
-			if i >= 3 {
-				break
-			}
-			titles = append(titles, t.Title)
-		}
+		titles = append(titles, s.Title)
 	}
 	return strings.Join(titles, " ")
 }
 
 func formatStories(stories []*task.Story) string {
 	if len(stories) == 0 {
-		return ""
+		return "（ストーリーなし）"
 	}
 
 	var b strings.Builder
 	for _, s := range stories {
-		b.WriteString(fmt.Sprintf("### %s (chain: %s)\n", s.Title, s.LayerChain))
+		priorityStr := ""
+		if s.Priority > 0 {
+			priorityStr = fmt.Sprintf(" P%d", s.Priority)
+		}
+		projectStr := ""
+		if s.Project != "" {
+			projectStr = fmt.Sprintf(" (project: %s)", s.Project)
+		}
+		statusStr := string(s.Status)
+		b.WriteString(fmt.Sprintf("### [%s]%s%s %s", statusStr, priorityStr, projectStr, s.Title))
+		if s.LayerChain != "" {
+			b.WriteString(fmt.Sprintf(" (chain: %s)", s.LayerChain))
+		}
+		b.WriteString("\n")
 		if s.Description != "" {
 			b.WriteString(fmt.Sprintf("  %s\n", s.Description))
 		}
+		if len(s.Tags) > 0 {
+			b.WriteString(fmt.Sprintf("  tags: %s\n", strings.Join(s.Tags, ", ")))
+		}
 		if len(s.Layers) == 0 {
-			b.WriteString("  レイヤー: なし\n")
+			b.WriteString("  レイヤー: なし（単タスク）\n")
 			continue
 		}
 		for i, l := range s.Layers {
@@ -321,7 +291,7 @@ func formatStories(stories []*task.Story) string {
 	return b.String()
 }
 
-func buildSuggestSystemPrompt(taskSummary, storySummary, relatedContext, globalSummary string) string {
+func buildSuggestSystemPrompt(storySummary, relatedContext, globalSummary string) string {
 	var b strings.Builder
 	b.WriteString(`あなたは「maidirector」、開発者の作業を支援するAIアシスタントです。
 以下の情報を基に、開発者が次に取り組むべきタスクを優先度付きで提案してください。
@@ -334,17 +304,12 @@ func buildSuggestSystemPrompt(taskSummary, storySummary, relatedContext, globalS
 5. PRのCIステータスがFAILUREの場合、CI修正を促す
 6. PRのCIステータスがPENDINGの場合、CI完了待ちであることを通知
 7. 進行中のタスクの完了を優先
-8. 優先度の高いタスクを優先
+8. 優先度の高いタスク（P値が小さい）を優先
 9. 長時間放置されているタスクに注意を促す
 
-## 現在のタスク一覧
+## 現在のストーリー一覧（単タスクを含む）
 `)
-	b.WriteString(taskSummary)
-
-	if storySummary != "" {
-		b.WriteString("\n## ストーリー（施策）のパイプライン状況\n")
-		b.WriteString(storySummary)
-	}
+	b.WriteString(storySummary)
 
 	if relatedContext != "" {
 		b.WriteString("\n## 関連する過去の文脈\n")

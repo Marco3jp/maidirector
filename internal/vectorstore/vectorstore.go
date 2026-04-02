@@ -26,7 +26,7 @@ type VectorStore struct {
 type PointPayload struct {
 	SourceType string `json:"source_type"`
 	SourceID   string `json:"source_id"`
-	TaskID     string `json:"task_id,omitempty"`
+	StoryID    string `json:"story_id,omitempty"`
 	Project    string `json:"project,omitempty"`
 	Content    string `json:"content"`
 	CreatedAt  string `json:"created_at"`

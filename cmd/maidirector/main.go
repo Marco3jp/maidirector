@@ -63,7 +63,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("Qdrantの初期化に失敗: %w", err)
 	}
 
-	taskService := task.NewService(db)
 	storyService := task.NewStoryService(db)
 	ctxManager := context.NewManager(db, vs, llmClient)
 
@@ -80,7 +79,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load embedded frontend: %w", err)
 	}
 
-	server := api.NewServer(cfg, taskService, storyService, ctxManager, llmClient, vs, ghClient, staticFS)
+	server := api.NewServer(cfg, storyService, ctxManager, llmClient, vs, ghClient, staticFS)
 
 	log.Printf("maidirector サーバー起動: http://localhost:%d", cfg.Server.Port)
 	return server.ListenAndServe()

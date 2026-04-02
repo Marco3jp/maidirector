@@ -20,7 +20,6 @@ import (
 
 type Server struct {
 	cfg         *config.Config
-	taskSvc     *task.Service
 	storySvc    *task.StoryService
 	ctxMgr      *context.Manager
 	llmClient   llm.Provider
@@ -30,10 +29,9 @@ type Server struct {
 	httpServer  *http.Server
 }
 
-func NewServer(cfg *config.Config, taskSvc *task.Service, storySvc *task.StoryService, ctxMgr *context.Manager, llmClient llm.Provider, vs *vectorstore.VectorStore, ghClient *github.Client, staticFS ...fs.FS) *Server {
+func NewServer(cfg *config.Config, storySvc *task.StoryService, ctxMgr *context.Manager, llmClient llm.Provider, vs *vectorstore.VectorStore, ghClient *github.Client, staticFS ...fs.FS) *Server {
 	s := &Server{
 		cfg:         cfg,
-		taskSvc:     taskSvc,
 		storySvc:    storySvc,
 		ctxMgr:      ctxMgr,
 		llmClient:   llmClient,
@@ -43,14 +41,6 @@ func NewServer(cfg *config.Config, taskSvc *task.Service, storySvc *task.StorySe
 	}
 
 	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /api/tasks", s.handleListTasks)
-	mux.HandleFunc("POST /api/tasks", s.handleCreateTask)
-	mux.HandleFunc("GET /api/tasks/{id}", s.handleGetTask)
-	mux.HandleFunc("PUT /api/tasks/{id}", s.handleUpdateTask)
-	mux.HandleFunc("DELETE /api/tasks/{id}", s.handleDeleteTask)
-	mux.HandleFunc("POST /api/tasks/{id}/context", s.handleAddContext)
-	mux.HandleFunc("GET /api/tasks/{id}/context", s.handleListContext)
 
 	mux.HandleFunc("GET /api/stories", s.handleListStories)
 	mux.HandleFunc("POST /api/stories", s.handleCreateStory)
@@ -62,6 +52,8 @@ func NewServer(cfg *config.Config, taskSvc *task.Service, storySvc *task.StorySe
 	mux.HandleFunc("DELETE /api/stories/{storyId}/layers/{layerId}", s.handleDeleteLayer)
 	mux.HandleFunc("POST /api/stories/{storyId}/layers/{layerId}/refresh-pr", s.handleRefreshLayerPR)
 	mux.HandleFunc("POST /api/stories/refresh-prs", s.handleRefreshAllPRs)
+	mux.HandleFunc("POST /api/stories/{id}/context", s.handleAddContext)
+	mux.HandleFunc("GET /api/stories/{id}/context", s.handleListContext)
 	mux.HandleFunc("GET /api/layer-chains", s.handleGetLayerChains)
 
 	mux.HandleFunc("POST /api/suggest", s.handleSuggest)
@@ -87,146 +79,6 @@ func NewServer(cfg *config.Config, taskSvc *task.Service, storySvc *task.StorySe
 
 func (s *Server) ListenAndServe() error {
 	return s.httpServer.ListenAndServe()
-}
-
-// --- Task handlers ---
-
-func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	status := r.URL.Query().Get("status")
-	project := r.URL.Query().Get("project")
-
-	tasks, err := s.taskSvc.List(status, project)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	if tasks == nil {
-		tasks = []*task.Task{}
-	}
-
-	writeJSON(w, http.StatusOK, tasks)
-}
-
-func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
-	var t task.Task
-	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if t.Title == "" {
-		writeError(w, http.StatusBadRequest, "title is required")
-		return
-	}
-
-	if err := s.taskSvc.Create(&t); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	go s.vectorizeTask(&t)
-
-	s.wsHub.Broadcast(ws.Message{Type: "task_created", Payload: t})
-	writeJSON(w, http.StatusCreated, t)
-}
-
-func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	t, err := s.taskSvc.Get(id)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "task not found")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, t)
-}
-
-func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	existing, err := s.taskSvc.Get(id)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "task not found")
-		return
-	}
-
-	var updates task.Task
-	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	existing.Title = updates.Title
-	existing.Description = updates.Description
-	existing.Status = updates.Status
-	existing.Priority = updates.Priority
-	existing.Project = updates.Project
-	existing.Links = updates.Links
-	existing.Tags = updates.Tags
-	existing.BlockedBy = updates.BlockedBy
-
-	if err := s.taskSvc.Update(existing); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	go s.vectorizeTask(existing)
-
-	s.wsHub.Broadcast(ws.Message{Type: "task_updated", Payload: existing})
-	writeJSON(w, http.StatusOK, existing)
-}
-
-func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	if err := s.taskSvc.Delete(id); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	go s.deleteTaskVectors(id)
-
-	s.wsHub.Broadcast(ws.Message{Type: "task_deleted", Payload: map[string]string{"id": id}})
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) handleAddContext(w http.ResponseWriter, r *http.Request) {
-	taskID := r.PathValue("id")
-
-	var entry task.ContextEntry
-	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	entry.TaskID = taskID
-
-	if err := s.taskSvc.AddContext(&entry); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	go s.vectorizeContextEntry(&entry)
-
-	writeJSON(w, http.StatusCreated, entry)
-}
-
-func (s *Server) handleListContext(w http.ResponseWriter, r *http.Request) {
-	taskID := r.PathValue("id")
-
-	entries, err := s.taskSvc.ListContext(taskID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	if entries == nil {
-		entries = []*task.ContextEntry{}
-	}
-
-	writeJSON(w, http.StatusOK, entries)
 }
 
 // --- Story handlers ---
@@ -259,6 +111,9 @@ func (s *Server) handleCreateStory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st.Layers = []*task.StoryLayer{}
+
+	go s.vectorizeStory(&st)
+
 	s.wsHub.Broadcast(ws.Message{Type: "story_created", Payload: st})
 	writeJSON(w, http.StatusCreated, st)
 }
@@ -291,11 +146,17 @@ func (s *Server) handleUpdateStory(w http.ResponseWriter, r *http.Request) {
 	existing.Description = updates.Description
 	existing.LayerChain = updates.LayerChain
 	existing.Status = updates.Status
+	existing.Priority = updates.Priority
+	existing.Project = updates.Project
+	existing.Links = updates.Links
+	existing.Tags = updates.Tags
 
 	if err := s.storySvc.Update(existing); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	go s.vectorizeStory(existing)
 
 	s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: existing})
 	writeJSON(w, http.StatusOK, existing)
@@ -307,6 +168,9 @@ func (s *Server) handleDeleteStory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	go s.deleteStoryVectors(id)
+
 	s.wsHub.Broadcast(ws.Message{Type: "story_deleted", Payload: map[string]string{"id": id}})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -399,7 +263,46 @@ func (s *Server) handleGetLayerChains(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, chains)
 }
 
-// --- Suggest / Chat handlers ---
+// --- Context handlers ---
+
+func (s *Server) handleAddContext(w http.ResponseWriter, r *http.Request) {
+	storyID := r.PathValue("id")
+
+	var entry task.ContextEntry
+	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	entry.StoryID = storyID
+
+	if err := s.storySvc.AddContext(&entry); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	go s.vectorizeContextEntry(&entry)
+
+	writeJSON(w, http.StatusCreated, entry)
+}
+
+func (s *Server) handleListContext(w http.ResponseWriter, r *http.Request) {
+	storyID := r.PathValue("id")
+
+	entries, err := s.storySvc.ListContext(storyID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if entries == nil {
+		entries = []*task.ContextEntry{}
+	}
+
+	writeJSON(w, http.StatusOK, entries)
+}
+
+// --- PR refresh ---
 
 func (s *Server) handleRefreshLayerPR(w http.ResponseWriter, r *http.Request) {
 	layerID := r.PathValue("layerId")
@@ -482,6 +385,8 @@ func (s *Server) handleRefreshAllPRs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stories)
 }
 
+// --- Suggest / Chat handlers ---
+
 func (s *Server) handleSuggest(w http.ResponseWriter, r *http.Request) {
 	s.refreshPRStates()
 
@@ -554,23 +459,23 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 // --- vectorization ---
 
-func (s *Server) vectorizeTask(t *task.Task) {
-	content := t.Title
-	if t.Description != "" {
-		content += "\n" + t.Description
+func (s *Server) vectorizeStory(st *task.Story) {
+	content := st.Title
+	if st.Description != "" {
+		content += "\n" + st.Description
 	}
-	if t.Project != "" {
-		content = "[" + t.Project + "] " + content
+	if st.Project != "" {
+		content = "[" + st.Project + "] " + content
 	}
 
 	if err := s.vectorStore.Upsert(gocontext.Background(), vectorstore.PointPayload{
-		SourceType: "task",
-		SourceID:   t.ID,
-		Project:    t.Project,
+		SourceType: "story",
+		SourceID:   st.ID,
+		Project:    st.Project,
 		Content:    content,
-		CreatedAt:  t.CreatedAt.Format(time.RFC3339),
+		CreatedAt:  st.CreatedAt.Format(time.RFC3339),
 	}); err != nil {
-		log.Printf("warning: failed to vectorize task %s: %v", t.ID, err)
+		log.Printf("warning: failed to vectorize story %s: %v", st.ID, err)
 	}
 }
 
@@ -580,7 +485,7 @@ func (s *Server) vectorizeContextEntry(e *task.ContextEntry) {
 	if err := s.vectorStore.Upsert(gocontext.Background(), vectorstore.PointPayload{
 		SourceType: "context_entry",
 		SourceID:   e.ID,
-		TaskID:     e.TaskID,
+		StoryID:    e.StoryID,
 		Content:    content,
 		CreatedAt:  e.CreatedAt.Format(time.RFC3339),
 	}); err != nil {
@@ -588,18 +493,18 @@ func (s *Server) vectorizeContextEntry(e *task.ContextEntry) {
 	}
 }
 
-func (s *Server) deleteTaskVectors(taskID string) {
-	if err := s.vectorStore.DeletePoints([]string{taskID}); err != nil {
-		log.Printf("warning: failed to delete task vector %s: %v", taskID, err)
+func (s *Server) deleteStoryVectors(storyID string) {
+	if err := s.vectorStore.DeletePoints([]string{storyID}); err != nil {
+		log.Printf("warning: failed to delete story vector %s: %v", storyID, err)
 	}
 
 	filter := map[string]any{
 		"must": []map[string]any{
-			{"key": "task_id", "match": map[string]any{"value": taskID}},
+			{"key": "story_id", "match": map[string]any{"value": storyID}},
 		},
 	}
 	if err := s.vectorStore.DeleteByFilter(filter); err != nil {
-		log.Printf("warning: failed to delete context vectors for task %s: %v", taskID, err)
+		log.Printf("warning: failed to delete context vectors for story %s: %v", storyID, err)
 	}
 }
 
