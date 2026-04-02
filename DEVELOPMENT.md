@@ -5,9 +5,9 @@
 
 ## Status
 
-- **現在のフェーズ**: Phase 1 (MVP) - コア実装完了、動作確認待ち
-- **直近の完了**: Phase 1 のフルスタック実装（Go backend + React frontend + Ollama/Qdrant 連携 + embed.FS 単一バイナリ）
-- **次にやること**: 実際に起動して動作確認、Ollama/Qdrant との疎通テスト、UI の微調整
+- **現在のフェーズ**: Phase 1 (MVP) - 動作確認完了
+- **直近の完了**: Phase 1 MVP のフルスタック実装 + 動作確認（タスクCRUD、LLM提案、チャット全て動作）
+- **次にやること**: タスク作成時のベクトル化追加、UIのリフレッシュ改善、Phase 2 の GitHub 連携検討
 
 ## Roadmap
 
@@ -82,4 +82,11 @@
   - React frontend: TaskList, TaskForm, SuggestPanel, ChatPanel, WebSocket hook
   - embed.FS で単一バイナリ化 (16MB)
   - Makefile でビルドフロー統合
-- 残課題: 実際の起動テスト、Ollama/Qdrant疎通確認、タスク作成時のベクトル化、.gitignore整備
+- 動作確認完了:
+  - サーバー起動 (localhost:8080) + ダッシュボード表示確認
+  - タスクCRUD (API + UI両方で動作確認済み)
+  - 「次にやること」提案機能 (Ollama qwen2.5:7b でSSEストリーミング動作)
+  - チャット機能 (タスク状況を踏まえた応答を確認)
+  - Qdrant コレクション自動作成 + ベクトル検索疎通
+- 確認時に qwen2.5:7b を使用（14bは後日pullして切替）
+- 残課題: タスク作成時のベクトル化、UIからのタスク作成後のリストリフレッシュ改善、favicon
