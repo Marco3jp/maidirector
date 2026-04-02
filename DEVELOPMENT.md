@@ -7,7 +7,7 @@
 
 - **現在のフェーズ**: Phase 2b' 実装完了 → Phase 2.5（Task/Story 統合）着手待ち
 - **直近の完了**: Phase 2b'（GitHub 連携強化 - 一括リロード + CI ステータス + isDraft + UI ラベル/色体系のGitHub準拠化）
-- **次にやること**: Phase 2.5（Task/Story データモデル統合）→ Phase 2c（チャットからのタスク操作）
+- **次にやること**: Phase 2.5（Task/Story データモデル統合）→ Phase 2c（組織内PRスキャン）→ Phase 2d（チャットからのタスク操作）
 
 ## Roadmap
 
@@ -37,12 +37,7 @@
 - UI のタスク/ストーリータブを廃止し、統合ビューに一本化
 - 詳細は後述の「Phase 2.5 設計ドキュメント」セクションを参照
 
-#### Phase 2c: チャットからのタスク操作
-- Ollama の tool use（function calling）サポート状況を検証
-- サポートが安定していれば: LLM tool use で Story CRUD を会話から実行（統合後は操作対象が1系統）
-- フォールバック案: スラッシュコマンド方式（`/create タスク名`）をフロントエンド側でパース
-
-#### Phase 2d: 組織内 PR スキャン → レビュータスク自動生成
+#### Phase 2c: 組織内 PR スキャン → レビュータスク自動生成
 - `gh search prs --org <組織名> --state open --sort updated` で組織内のオープン PR を取得
 - 初回は直近1週間分を取得、以降は前回実行時刻からの差分のみ（`--updated >YYYY-MM-DD` で絞り込み）
 - bot ユーザーの PR はスキップ（author が `[bot]` suffix または設定ファイルで除外リスト定義）
@@ -52,6 +47,11 @@
 - 前回実行時刻は SQLite に保存（`key_value` テーブルまたは `settings` テーブル）
 - UI: 手動実行ボタン（「組織PRスキャン」）+ 結果通知
 - Phase 2.5（Task/Story 統合）完了後に着手が前提
+
+#### Phase 2d: チャットからのタスク操作
+- Ollama の tool use（function calling）サポート状況を検証
+- サポートが安定していれば: LLM tool use で Story CRUD を会話から実行（統合後は操作対象が1系統）
+- フォールバック案: スラッシュコマンド方式（`/create タスク名`）をフロントエンド側でパース
 
 #### Phase 2 後回し（必要に応じて）
 - macOS デスクトップ通知 (osascript)
@@ -158,10 +158,10 @@ gh pr view <url> --json number,title,state,isDraft,mergeable,reviewDecision,url,
 - Task/Story データモデル統合（詳細は「Phase 2.5 設計ドキュメント」セクションを参照）
 
 ### Phase 2c で対応予定
-- → Roadmap の Phase 2c を参照（Phase 2.5 完了後に着手）
+- 組織内 PR スキャン → レビュータスク自動生成（Phase 2.5 完了後に着手）
 
 ### Phase 2d で対応予定
-- 組織内 PR スキャン → レビュータスク自動生成（Phase 2.5 完了後に着手）
+- チャットからのタスク操作（Ollama tool use）
 
 ### 将来の検討事項
 - Chrome SpeechRecognition API のブラウザ制限 (Phase 3)
