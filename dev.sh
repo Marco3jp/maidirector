@@ -122,12 +122,17 @@ else
 fi
 
 header "5. npm 依存関係"
-if [ -d "$SCRIPT_DIR/web/node_modules" ]; then
-  skip "node_modules はインストール済み"
+LOCK_FILE="$SCRIPT_DIR/web/package-lock.json"
+HASH_FILE="$SCRIPT_DIR/web/node_modules/.package-lock-hash"
+CURRENT_HASH=$(shasum "$LOCK_FILE" | awk '{print $1}')
+
+if [ -d "$SCRIPT_DIR/web/node_modules" ] && [ -f "$HASH_FILE" ] && [ "$(cat "$HASH_FILE")" = "$CURRENT_HASH" ]; then
+  skip "node_modules は最新 (package-lock.json 変更なし)"
 else
-  echo -e "  npm install 実行中..."
-  (cd "$SCRIPT_DIR/web" && npm install)
-  ok "npm install 完了"
+  echo -e "  npm ci 実行中..."
+  (cd "$SCRIPT_DIR/web" && npm ci)
+  echo "$CURRENT_HASH" > "$HASH_FILE"
+  ok "npm ci 完了"
 fi
 
 header "6. maidirector 起動"

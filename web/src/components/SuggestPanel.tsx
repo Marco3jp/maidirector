@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { api } from '../api/client';
 
 export function SuggestPanel() {
@@ -25,14 +26,13 @@ export function SuggestPanel() {
   return (
     <div className="suggest-panel">
       <div className="suggest-header">
-        <h2>次にやること</h2>
         <button onClick={handleSuggest} disabled={loading} className="btn-suggest">
           {loading ? '考え中...' : '提案してもらう'}
         </button>
       </div>
       {suggestion && (
         <div className="suggest-content">
-          <pre>{suggestion}</pre>
+          <ReactMarkdown>{suggestion}</ReactMarkdown>
         </div>
       )}
     </div>

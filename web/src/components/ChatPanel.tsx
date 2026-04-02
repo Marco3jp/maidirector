@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { api } from '../api/client';
 
 interface Message {
@@ -53,7 +54,6 @@ export function ChatPanel() {
 
   return (
     <div className="chat-panel">
-      <h2>チャット</h2>
       <div className="chat-messages">
         {messages.length === 0 && (
           <div className="chat-empty">タスクについて何でも聞いてください。</div>
@@ -61,7 +61,13 @@ export function ChatPanel() {
         {messages.map((msg, i) => (
           <div key={i} className={`chat-message chat-${msg.role}`}>
             <div className="chat-role">{msg.role === 'user' ? 'あなた' : 'maidirector'}</div>
-            <pre className="chat-content">{msg.content}</pre>
+            {msg.role === 'user' ? (
+              <div className="chat-content">{msg.content}</div>
+            ) : (
+              <div className="chat-content chat-content-md">
+                <ReactMarkdown>{msg.content}</ReactMarkdown>
+              </div>
+            )}
           </div>
         ))}
         <div ref={messagesEndRef} />

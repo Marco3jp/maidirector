@@ -166,7 +166,12 @@ function App() {
               チャット
             </button>
           </div>
-          {activeTab === 'suggest' ? <SuggestPanel /> : <ChatPanel />}
+          <div style={{ display: activeTab === 'suggest' ? 'contents' : 'none' }}>
+            <SuggestPanel />
+          </div>
+          <div style={{ display: activeTab === 'chat' ? 'contents' : 'none' }}>
+            <ChatPanel />
+          </div>
         </section>
       </main>
     </div>
