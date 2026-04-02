@@ -5,9 +5,9 @@
 
 ## Status
 
-- **現在のフェーズ**: Phase 2c 実装完了 → Phase 2d（チャットからのタスク操作）着手待ち
+- **現在のフェーズ**: Phase 2c 実装完了 → Phase 2c'（スヌーズ機能）着手待ち
 - **直近の完了**: Phase 2c（組織内PRスキャン → レビュータスク自動生成）
-- **次にやること**: Phase 2d（チャットからのタスク操作）
+- **次にやること**: Phase 2c'（スヌーズ機能）→ Phase 2d（チャットからのタスク操作）
 
 ## Roadmap
 
@@ -47,6 +47,21 @@
 - UI: 手動実行ボタン（「🔍 組織PRスキャン」）+ 結果バナー通知
 - ストーリーのソート順を `priority ASC, created_at ASC` に変更（同一priority内で古いものが先 = FIFO）
 - 設定: `maidirector.yml` の `github.org`, `github.exclude_authors`, `github.bot_policy`
+
+#### Phase 2c': スヌーズ機能
+- ストーリーカードを一定時間「スヌーズ」し、priority に関係なくリストの一番下に表示する
+- `stories` テーブルに `snoozed_until DATETIME` カラム追加
+- ソート順: `CASE WHEN snoozed_until > CURRENT_TIMESTAMP THEN 1 ELSE 0 END ASC, priority ASC, created_at ASC`
+- スヌーズ期間の選択肢:
+  - 30分 / 1時間 / 3時間 / 明日まで（翌日 09:00）/ 来週まで（次の月曜 09:00）
+- API:
+  - `POST /api/stories/{id}/snooze` — body: `{ "duration": "30m" | "1h" | "3h" | "tomorrow" | "next_week" }`
+  - `POST /api/stories/{id}/unsnooze` — スヌーズ解除
+- UI:
+  - カードに ⏰ ボタン → クリックで期間選択ドロップダウン
+  - スヌーズ中のカードは視覚的に区別（opacity 低下 + 残り時間バッジ表示）
+  - スヌーズ解除ボタン
+- スヌーズ期限切れ時はソート位置が自動的に元に戻る（クエリ時に判定するだけで cron 不要）
 
 #### Phase 2d: チャットからのタスク操作
 - Ollama の tool use（function calling）サポート状況を検証
