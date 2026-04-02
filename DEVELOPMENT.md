@@ -5,8 +5,8 @@
 
 ## Status
 
-- **現在のフェーズ**: Phase 2b 実装・動作確認完了 → Phase 2c 着手待ち
-- **直近の完了**: Phase 2b（GitHub 連携 - gh コマンドによる PR 状態取得・自動ブロッキング判定）の実装と動作確認
+- **現在のフェーズ**: Phase 2b' 実装完了 → Phase 2c 着手待ち
+- **直近の完了**: Phase 2b'（GitHub 連携強化 - 一括リロード + CI ステータス + isDraft + UI ラベル/色体系のGitHub準拠化）
 - **次にやること**: Phase 2c 着手（チャットからのタスク操作）
 
 ## Roadmap
@@ -34,6 +34,15 @@
 - PR URL を story_layer に貼り付け → gh で PR 情報取得・表示
 - Suggest/チャット時にストーリーに紐づく PR の最新状態を gh で取得してからプロンプトに注入
 - 上流レイヤーの PR マージ状態による自動ブロッキング判定
+
+#### Phase 2b': GitHub 連携強化 ✅
+- ストーリー単位の PR ステータス一括リロードボタンを UI に追加（`POST /api/stories/refresh-prs`）
+- `gh pr view` の取得項目に `statusCheckRollup`, `isDraft` を追加
+- `StoryLayer` モデル / DB に `pr_is_draft`（INTEGER）, `pr_check_status`（TEXT）フィールドを追加
+- パイプラインビューに CI ステータス表示（✓/✗/⏳ アイコン + ラベル）
+- PR ステータスラベルを GitHub 準拠に変更（マージ済み:紫 / オープン:緑 / オープン（ドラフト）:灰 / 未着手:灰）
+- ブロック状態はラベルではなく視覚表現（opacity + dashed border）のみで表現
+- Suggest/Chat プロンプトに CI 結果・draft 状態を含める（CI 失敗時に修正を促す判断基準を追加）
 
 #### Phase 2c: チャットからのタスク操作
 - Ollama の tool use（function calling）サポート状況を検証
@@ -139,7 +148,7 @@ stories テーブル
 
 story_layers テーブル
   - id, story_id, layer_name, status (pending/in_progress/review/merged)
-  - pr_url, pr_number, pr_state
+  - pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft (INTEGER), pr_check_status
   - sort_order (レイヤーチェーン内の順序、ブロック判定に使用)
   - created_at, updated_at
   - FOREIGN KEY (story_id) → stories(id) ON DELETE CASCADE
@@ -147,12 +156,15 @@ story_layers テーブル
 
 ブロック判定は `blocked_by` カラムではなく `sort_order` を使い表示時に計算する方式を採用。直前のレイヤーが merged でなければブロック中と判定する。
 
-### 「次にやること」への統合（Phase 2a で部分実装済み）
+### 「次にやること」への統合（Phase 2b' まで実装済み）
 
 Suggest / Chat プロンプトにストーリー/レイヤー情報を注入済み:
 - ✅ アクティブなストーリーのパイプライン状況（各レイヤーのステータス + ブロック判定）をプロンプトに含める
 - ✅ 判断基準に「上流がマージ済みで下流が未着手の場合、着手を提案」を追加
-- Phase 2b 以降: PR の実際の状態を gh コマンドで取得してから判定
+- ✅ PR の実際の状態を gh コマンドで取得してから判定（Suggest/Chat 実行前に全 PR を一括リフレッシュ、マージ済みレイヤーはスキップ）
+- ✅ PR の reviewDecision (APPROVED/CHANGES_REQUESTED) に基づく提案を追加
+- ✅ PR の isDraft 状態をプロンプトに含める
+- ✅ CI ステータス (SUCCESS/FAILURE/PENDING) に基づく提案を追加（FAILURE → 修正促進、PENDING → 待ち通知）
 - 将来: 全レイヤー完了時にストーリーを自動完了扱い
 
 ### GitHub 連携方針: gh コマンド + イベント駆動
@@ -173,7 +185,7 @@ Suggest / Chat プロンプトにストーリー/レイヤー情報を注入済�
 **gh コマンド活用例:**
 ```bash
 # PR の状態取得
-gh pr view <url> --json state,title,mergeable,reviewDecision,statusCheckRollup
+gh pr view <url> --json number,title,state,isDraft,mergeable,reviewDecision,url,statusCheckRollup
 
 # 自分に関連する PR 一覧
 gh pr list --author @me --json number,title,url,headRefName,state
@@ -191,6 +203,7 @@ gh pr list --repo <owner>/<repo> --search "label:story-a" --json number,title,ur
 
 - ✅ Phase 2a: ストーリー/レイヤーのデータモデル・CRUD・パイプラインビュー・Suggest 統合を実装済み
 - ✅ Phase 2b: gh コマンド連携による PR 状態取得・自動ブロッキング判定を実装済み
+- ✅ Phase 2b': 一括リロード・CI ステータス・isDraft・UI ラベル/色体系の GitHub 準拠化を実装済み
 
 ## Known Issues / TODO
 
@@ -208,6 +221,9 @@ gh pr list --repo <owner>/<repo> --search "label:story-a" --json number,title,ur
 
 ### Phase 2b 実装済み ✅
 - GitHub 連携（gh コマンドによる PR 状態取得・自動ブロッキング判定）
+
+### Phase 2b' 実装済み ✅
+- GitHub 連携強化（一括リロード・CI ステータス・isDraft・UI ラベル/色体系の GitHub 準拠化・マージ済みレイヤーのリフレッシュスキップ）
 
 ### Phase 2c で対応予定
 - → Roadmap の Phase 2c を参照
@@ -361,3 +377,41 @@ gh pr list --repo <owner>/<repo> --search "label:story-a" --json number,title,ur
   - `POST .../refresh-pr` → 最新の PR 情報で更新されることを確認
   - ストーリー GET → layers に新カラム（pr_title, pr_review_decision）が含まれることを確認
   - フロントエンドビルド成功（11.04kB CSS, 210.80kB JS gzip 65.38kB）
+  - ブラウザ UI 確認（後追い）:
+    - ストーリータブ: パイプラインビューに PR 情報（PR番号リンク、↻ボタン、タイトル、OPEN バッジ、Review Required）が正しく表示
+    - ブロック判定: proto が未着手のとき下流レイヤーが全てブロック中（破線+opacity低下）で表示
+    - 「+ PR」ボタン: クリックで PR URL 入力フォーム表示、✕ で閉じてボタンに戻る動作を確認
+    - WebSocket によるリアルタイム更新が正常動作
+- 開発環境一括起動スクリプト `dev.sh` を追加:
+  - コマンド存在確認（go/node/npm/docker/ollama/gh）→ 不足時は brew install ヒント表示
+  - Qdrant Docker コンテナ起動（起動済みならスキップ）
+  - Ollama 起動 + モデル確認（qwen2.5:7b, nomic-embed-text）
+  - gh CLI 認証確認（未認証でも続行可）
+  - npm install（node_modules 存在時スキップ）
+  - バックエンド/フロントエンド dev server 起動（ポート使用中ならスキップ）
+  - 全てべき等: 2回目以降は起動済みサービスを全スキップ
+
+### Phase 2b' 実装（GitHub 連携強化）
+- `gh pr view` の取得項目に `isDraft`, `statusCheckRollup` を追加
+  - `checkRollupItem` 構造体で StatusCheckRollup の各 check を解析
+  - `summarizeChecks()`: SUCCESS/FAILURE/PENDING を集約して1ステータスに
+- データモデル拡張:
+  - `PRInfo` に `IsDraft bool`, `CheckStatus string` を追加
+  - `StoryLayer` に `PRIsDraft bool`, `PRCheckStatus string` を追加
+  - SQLite マイグレーション: `pr_is_draft INTEGER DEFAULT 0`, `pr_check_status TEXT DEFAULT ''`
+  - `scanStoryLayer()` ヘルパー関数で bool ↔ INTEGER 変換を共通化
+- API 拡張:
+  - `POST /api/stories/refresh-prs`: 全アクティブストーリーの PR 情報を一括更新
+  - `applyPRInfo()` に isDraft, checkStatus の反映を追加
+- フロントエンド:
+  - PR ステータスラベルを GitHub 準拠に: マージ済み（紫）/ オープン（緑）/ オープン（ドラフト）（灰）/ 未着手（灰）
+  - ブロック状態はラベルに影響せず opacity + dashed border のみで表現
+  - CI ステータス表示: ✓ CI pass（緑）/ ✗ CI fail（赤）/ ⏳ CI 実行中（黄）
+  - 「↻ 全PR情報を更新」グローバルリフレッシュボタンを追加
+  - `api.refreshAllPRs()` メソッド追加
+- LLM プロンプト:
+  - `formatStories()` に draft, ci 情報を追加
+  - 判断基準に CI FAILURE → 修正促進、CI PENDING → 待ち通知を追加
+- 最適化:
+  - `refreshPRStates()` でマージ済みレイヤー（`status == merged`）をスキップ（不要な gh API コール削減）
+- コンパイル確認: Go build + TypeScript type check ともにエラーなし

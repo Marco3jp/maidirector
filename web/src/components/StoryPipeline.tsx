@@ -16,12 +16,6 @@ const LAYER_STATUS_COLORS: Record<LayerStatus, string> = {
   merged: '#22c55e',
 };
 
-const PR_STATE_LABELS: Record<string, string> = {
-  OPEN: 'Open',
-  CLOSED: 'Closed',
-  MERGED: 'Merged',
-};
-
 const REVIEW_LABELS: Record<string, string> = {
   APPROVED: 'Approved',
   CHANGES_REQUESTED: 'Changes Requested',
@@ -34,6 +28,31 @@ const REVIEW_COLORS: Record<string, string> = {
   REVIEW_REQUIRED: '#f59e0b',
 };
 
+const CI_STATUS_DISPLAY: Record<string, { label: string; color: string; icon: string }> = {
+  SUCCESS: { label: 'CI pass', color: '#22c55e', icon: '✓' },
+  FAILURE: { label: 'CI fail', color: '#ef4444', icon: '✗' },
+  PENDING: { label: 'CI 実行中', color: '#f59e0b', icon: '⏳' },
+};
+
+function getPRStatusLabel(layer: StoryLayer): { label: string; color: string; className: string } {
+  if (!layer.pr_url) {
+    return { label: '未着手', color: '#6b7280', className: 'pipeline-pr-state-none' };
+  }
+  if (layer.pr_state === 'MERGED') {
+    return { label: 'マージ済み', color: '#8b5cf6', className: 'pipeline-pr-state-merged' };
+  }
+  if (layer.pr_is_draft) {
+    return { label: 'オープン（ドラフト）', color: '#6b7280', className: 'pipeline-pr-state-draft' };
+  }
+  if (layer.pr_state === 'OPEN') {
+    return { label: 'オープン', color: '#22c55e', className: 'pipeline-pr-state-open' };
+  }
+  if (layer.pr_state === 'CLOSED') {
+    return { label: 'クローズ', color: '#ef4444', className: 'pipeline-pr-state-closed' };
+  }
+  return { label: '未着手', color: '#6b7280', className: 'pipeline-pr-state-none' };
+}
+
 interface Props {
   stories: Story[];
   onRefresh: () => void;
@@ -42,10 +61,23 @@ interface Props {
 export function StoryPipeline({ stories, onRefresh }: Props) {
   const [chains, setChains] = useState<LayerChain[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [refreshingAll, setRefreshingAll] = useState(false);
 
   useEffect(() => {
     api.getLayerChains().then(setChains).catch(console.error);
   }, []);
+
+  const handleRefreshAllPRs = async () => {
+    setRefreshingAll(true);
+    try {
+      await api.refreshAllPRs();
+      onRefresh();
+    } catch (e) {
+      console.error('Failed to refresh all PRs:', e);
+    } finally {
+      setRefreshingAll(false);
+    }
+  };
 
   const handleDelete = async (id: string) => {
     if (!confirm('このストーリーを削除しますか？')) return;
@@ -126,6 +158,15 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
 
   return (
     <div className="story-list">
+      <div className="story-list-toolbar">
+        <button
+          className="btn-refresh-all"
+          onClick={handleRefreshAllPRs}
+          disabled={refreshingAll}
+        >
+          {refreshingAll ? '↻ 更新中...' : '↻ 全PR情報を更新'}
+        </button>
+      </div>
       {stories.map((story) => {
         const chainLayers = getChainLayers(story.layer_chain);
         const missingLayers = chainLayers.filter(
@@ -235,6 +276,9 @@ function PipelineStage({
     }
   };
 
+  const prStatus = getPRStatusLabel(layer);
+  const ciInfo = layer.pr_check_status ? CI_STATUS_DISPLAY[layer.pr_check_status] : null;
+
   return (
     <div className={`pipeline-stage ${blocked ? 'pipeline-blocked' : ''}`}>
       <div className="pipeline-connector">
@@ -249,7 +293,11 @@ function PipelineStage({
           className="pipeline-status"
           style={{ backgroundColor: LAYER_STATUS_COLORS[layer.status] }}
         >
-          {blocked && layer.status !== 'merged' ? 'ブロック中' : LAYER_STATUS_LABELS[layer.status]}
+          {LAYER_STATUS_LABELS[layer.status]}
+        </span>
+
+        <span className={`pipeline-pr-state ${prStatus.className}`} style={{ color: prStatus.color }}>
+          {prStatus.label}
         </span>
 
         {layer.pr_url ? (
@@ -277,19 +325,21 @@ function PipelineStage({
                 {layer.pr_title.length > 30 ? layer.pr_title.slice(0, 30) + '…' : layer.pr_title}
               </div>
             )}
-            {layer.pr_state && (
-              <span className={`pipeline-pr-state pipeline-pr-state-${layer.pr_state.toLowerCase()}`}>
-                {PR_STATE_LABELS[layer.pr_state] || layer.pr_state}
-              </span>
-            )}
-            {layer.pr_review_decision && (
-              <span
-                className="pipeline-pr-review"
-                style={{ color: REVIEW_COLORS[layer.pr_review_decision] || 'var(--text-muted)' }}
-              >
-                {REVIEW_LABELS[layer.pr_review_decision] || layer.pr_review_decision}
-              </span>
-            )}
+            <div className="pipeline-pr-meta">
+              {layer.pr_review_decision && (
+                <span
+                  className="pipeline-pr-review"
+                  style={{ color: REVIEW_COLORS[layer.pr_review_decision] || 'var(--text-muted)' }}
+                >
+                  {REVIEW_LABELS[layer.pr_review_decision] || layer.pr_review_decision}
+                </span>
+              )}
+              {ciInfo && (
+                <span className="pipeline-ci-status" style={{ color: ciInfo.color }}>
+                  {ciInfo.icon} {ciInfo.label}
+                </span>
+              )}
+            </div>
           </div>
         ) : (
           <div className="pipeline-pr-actions">

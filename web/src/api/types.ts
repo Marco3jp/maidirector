@@ -60,6 +60,8 @@ export interface StoryLayer {
   pr_state: string;
   pr_title: string;
   pr_review_decision: string;
+  pr_is_draft: boolean;
+  pr_check_status: string;
   sort_order: number;
   created_at: string;
   updated_at: string;

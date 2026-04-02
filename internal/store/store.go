@@ -114,6 +114,8 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_story_layers_story_id ON story_layers(story_id)`,
 		`ALTER TABLE story_layers ADD COLUMN pr_title TEXT DEFAULT ''`,
 		`ALTER TABLE story_layers ADD COLUMN pr_review_decision TEXT DEFAULT ''`,
+		`ALTER TABLE story_layers ADD COLUMN pr_is_draft INTEGER DEFAULT 0`,
+		`ALTER TABLE story_layers ADD COLUMN pr_check_status TEXT DEFAULT ''`,
 	}
 
 	for _, m := range migrations {
@@ -423,9 +425,9 @@ func (s *Store) CreateStoryLayer(l *task.StoryLayer) error {
 	}
 
 	_, err := s.db.Exec(
-		`INSERT INTO story_layers (id, story_id, layer_name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, sort_order, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		l.ID, l.StoryID, l.LayerName, l.Status, l.PRUrl, l.PRNumber, l.PRState, l.PRTitle, l.PRReviewDecision, l.SortOrder, l.CreatedAt, l.UpdatedAt,
+		`INSERT INTO story_layers (id, story_id, layer_name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, sort_order, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		l.ID, l.StoryID, l.LayerName, l.Status, l.PRUrl, l.PRNumber, l.PRState, l.PRTitle, l.PRReviewDecision, boolToInt(l.PRIsDraft), l.PRCheckStatus, l.SortOrder, l.CreatedAt, l.UpdatedAt,
 	)
 	if err != nil {
 		return err
@@ -437,7 +439,7 @@ func (s *Store) CreateStoryLayer(l *task.StoryLayer) error {
 
 func (s *Store) ListStoryLayers(storyID string) ([]*task.StoryLayer, error) {
 	rows, err := s.db.Query(
-		`SELECT id, story_id, layer_name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, sort_order, created_at, updated_at
+		`SELECT id, story_id, layer_name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, sort_order, created_at, updated_at
 		 FROM story_layers WHERE story_id = ? ORDER BY sort_order ASC`, storyID,
 	)
 	if err != nil {
@@ -447,8 +449,8 @@ func (s *Store) ListStoryLayers(storyID string) ([]*task.StoryLayer, error) {
 
 	var layers []*task.StoryLayer
 	for rows.Next() {
-		l := &task.StoryLayer{}
-		if err := rows.Scan(&l.ID, &l.StoryID, &l.LayerName, &l.Status, &l.PRUrl, &l.PRNumber, &l.PRState, &l.PRTitle, &l.PRReviewDecision, &l.SortOrder, &l.CreatedAt, &l.UpdatedAt); err != nil {
+		l, err := scanStoryLayer(rows)
+		if err != nil {
 			return nil, err
 		}
 		layers = append(layers, l)
@@ -462,8 +464,8 @@ func (s *Store) ListStoryLayers(storyID string) ([]*task.StoryLayer, error) {
 func (s *Store) UpdateStoryLayer(l *task.StoryLayer) error {
 	l.UpdatedAt = time.Now()
 	_, err := s.db.Exec(
-		`UPDATE story_layers SET layer_name=?, status=?, pr_url=?, pr_number=?, pr_state=?, pr_title=?, pr_review_decision=?, sort_order=?, updated_at=? WHERE id=?`,
-		l.LayerName, l.Status, l.PRUrl, l.PRNumber, l.PRState, l.PRTitle, l.PRReviewDecision, l.SortOrder, l.UpdatedAt, l.ID,
+		`UPDATE story_layers SET layer_name=?, status=?, pr_url=?, pr_number=?, pr_state=?, pr_title=?, pr_review_decision=?, pr_is_draft=?, pr_check_status=?, sort_order=?, updated_at=? WHERE id=?`,
+		l.LayerName, l.Status, l.PRUrl, l.PRNumber, l.PRState, l.PRTitle, l.PRReviewDecision, boolToInt(l.PRIsDraft), l.PRCheckStatus, l.SortOrder, l.UpdatedAt, l.ID,
 	)
 	if err != nil {
 		return err
@@ -490,17 +492,30 @@ func (s *Store) DeleteStoryLayer(id string) error {
 
 func (s *Store) GetStoryLayer(id string) (*task.StoryLayer, error) {
 	row := s.db.QueryRow(
-		`SELECT id, story_id, layer_name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, sort_order, created_at, updated_at
+		`SELECT id, story_id, layer_name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, sort_order, created_at, updated_at
 		 FROM story_layers WHERE id = ?`, id,
 	)
-	l := &task.StoryLayer{}
-	if err := row.Scan(&l.ID, &l.StoryID, &l.LayerName, &l.Status, &l.PRUrl, &l.PRNumber, &l.PRState, &l.PRTitle, &l.PRReviewDecision, &l.SortOrder, &l.CreatedAt, &l.UpdatedAt); err != nil {
-		return nil, err
-	}
-	return l, nil
+	return scanStoryLayer(row)
 }
 
 // --- scan helpers ---
+
+func scanStoryLayer(sc scannable) (*task.StoryLayer, error) {
+	l := &task.StoryLayer{}
+	var isDraft int
+	if err := sc.Scan(&l.ID, &l.StoryID, &l.LayerName, &l.Status, &l.PRUrl, &l.PRNumber, &l.PRState, &l.PRTitle, &l.PRReviewDecision, &isDraft, &l.PRCheckStatus, &l.SortOrder, &l.CreatedAt, &l.UpdatedAt); err != nil {
+		return nil, err
+	}
+	l.PRIsDraft = isDraft != 0
+	return l, nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
 
 type scannable interface {
 	Scan(dest ...any) error

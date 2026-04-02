@@ -117,6 +117,10 @@ export const api = {
     return request(`/stories/${storyId}/layers/${layerId}/refresh-pr`, { method: 'POST' });
   },
 
+  refreshAllPRs(): Promise<Story[]> {
+    return request('/stories/refresh-prs', { method: 'POST' });
+  },
+
   getLayerChains(): Promise<LayerChain[]> {
     return request('/layer-chains');
   },

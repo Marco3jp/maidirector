@@ -86,6 +86,8 @@ type StoryLayer struct {
 	PRState          string      `json:"pr_state"`
 	PRTitle          string      `json:"pr_title"`
 	PRReviewDecision string      `json:"pr_review_decision"`
+	PRIsDraft        bool        `json:"pr_is_draft"`
+	PRCheckStatus    string      `json:"pr_check_status"`
 	SortOrder        int         `json:"sort_order"`
 	CreatedAt        time.Time   `json:"created_at"`
 	UpdatedAt        time.Time   `json:"updated_at"`

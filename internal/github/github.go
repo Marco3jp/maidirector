@@ -12,9 +12,28 @@ type PRInfo struct {
 	Number         int    `json:"number"`
 	Title          string `json:"title"`
 	State          string `json:"state"`
+	IsDraft        bool   `json:"isDraft"`
 	Mergeable      string `json:"mergeable"`
 	ReviewDecision string `json:"reviewDecision"`
+	CheckStatus    string `json:"checkStatus"`
 	URL            string `json:"url"`
+}
+
+type checkRollupItem struct {
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	State      string `json:"state"`
+}
+
+type ghRawResponse struct {
+	Number             int               `json:"number"`
+	Title              string            `json:"title"`
+	State              string            `json:"state"`
+	IsDraft            bool              `json:"isDraft"`
+	Mergeable          string            `json:"mergeable"`
+	ReviewDecision     string            `json:"reviewDecision"`
+	URL                string            `json:"url"`
+	StatusCheckRollup  []checkRollupItem `json:"statusCheckRollup"`
 }
 
 type Client struct{}
@@ -25,7 +44,7 @@ func NewClient() *Client {
 
 func (c *Client) GetPRInfo(prURL string) (*PRInfo, error) {
 	cmd := exec.Command("gh", "pr", "view", prURL,
-		"--json", "number,title,state,mergeable,reviewDecision,url")
+		"--json", "number,title,state,isDraft,mergeable,reviewDecision,url,statusCheckRollup")
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -35,12 +54,50 @@ func (c *Client) GetPRInfo(prURL string) (*PRInfo, error) {
 		return nil, fmt.Errorf("gh pr view failed: %w", err)
 	}
 
-	var info PRInfo
-	if err := json.Unmarshal(out, &info); err != nil {
+	var raw ghRawResponse
+	if err := json.Unmarshal(out, &raw); err != nil {
 		return nil, fmt.Errorf("failed to parse gh output: %w", err)
 	}
 
-	return &info, nil
+	return &PRInfo{
+		Number:         raw.Number,
+		Title:          raw.Title,
+		State:          raw.State,
+		IsDraft:        raw.IsDraft,
+		Mergeable:      raw.Mergeable,
+		ReviewDecision: raw.ReviewDecision,
+		CheckStatus:    summarizeChecks(raw.StatusCheckRollup),
+		URL:            raw.URL,
+	}, nil
+}
+
+func summarizeChecks(checks []checkRollupItem) string {
+	if len(checks) == 0 {
+		return ""
+	}
+	hasFailure := false
+	hasPending := false
+	for _, c := range checks {
+		conclusion := c.Conclusion
+		if conclusion == "" {
+			conclusion = c.State
+		}
+		switch conclusion {
+		case "FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED":
+			hasFailure = true
+		case "SUCCESS", "NEUTRAL", "SKIPPED":
+			// ok
+		default:
+			hasPending = true
+		}
+	}
+	if hasFailure {
+		return "FAILURE"
+	}
+	if hasPending {
+		return "PENDING"
+	}
+	return "SUCCESS"
 }
 
 func (c *Client) IsAvailable() bool {

@@ -61,6 +61,7 @@ func NewServer(cfg *config.Config, taskSvc *task.Service, storySvc *task.StorySe
 	mux.HandleFunc("PUT /api/stories/{storyId}/layers/{layerId}", s.handleUpdateLayer)
 	mux.HandleFunc("DELETE /api/stories/{storyId}/layers/{layerId}", s.handleDeleteLayer)
 	mux.HandleFunc("POST /api/stories/{storyId}/layers/{layerId}/refresh-pr", s.handleRefreshLayerPR)
+	mux.HandleFunc("POST /api/stories/refresh-prs", s.handleRefreshAllPRs)
 	mux.HandleFunc("GET /api/layer-chains", s.handleGetLayerChains)
 
 	mux.HandleFunc("POST /api/suggest", s.handleSuggest)
@@ -442,6 +443,8 @@ func (s *Server) applyPRInfo(layer *task.StoryLayer) {
 	layer.PRState = info.State
 	layer.PRTitle = info.Title
 	layer.PRReviewDecision = info.ReviewDecision
+	layer.PRIsDraft = info.IsDraft
+	layer.PRCheckStatus = info.CheckStatus
 	if info.State == "MERGED" && layer.Status != task.LayerStatusMerged {
 		layer.Status = task.LayerStatusMerged
 	}
@@ -458,7 +461,7 @@ func (s *Server) refreshPRStates() {
 	}
 	for _, story := range stories {
 		for _, layer := range story.Layers {
-			if layer.PRUrl == "" {
+			if layer.PRUrl == "" || layer.Status == task.LayerStatusMerged {
 				continue
 			}
 			s.applyPRInfo(layer)
@@ -467,6 +470,16 @@ func (s *Server) refreshPRStates() {
 			}
 		}
 	}
+}
+
+func (s *Server) handleRefreshAllPRs(w http.ResponseWriter, r *http.Request) {
+	s.refreshPRStates()
+	stories, err := s.storySvc.List("active")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, stories)
 }
 
 func (s *Server) handleSuggest(w http.ResponseWriter, r *http.Request) {

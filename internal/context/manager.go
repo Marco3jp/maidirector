@@ -301,8 +301,14 @@ func formatStories(stories []*task.Story) string {
 				if l.PRState != "" {
 					prParts = append(prParts, "state:"+l.PRState)
 				}
+				if l.PRIsDraft {
+					prParts = append(prParts, "draft:true")
+				}
 				if l.PRReviewDecision != "" {
 					prParts = append(prParts, "review:"+l.PRReviewDecision)
+				}
+				if l.PRCheckStatus != "" {
+					prParts = append(prParts, "ci:"+l.PRCheckStatus)
 				}
 				if l.PRTitle != "" {
 					prParts = append(prParts, l.PRTitle)
@@ -325,9 +331,11 @@ func buildSuggestSystemPrompt(taskSummary, storySummary, relatedContext, globalS
 2. ストーリーのパイプラインで上流PRがマージ済みなのに下流が未着手の場合、着手を提案
 3. PRのレビューステータスがAPPROVEDで未マージの場合、マージを促す
 4. PRがCHANGES_REQUESTEDの場合、修正対応を促す
-5. 進行中のタスクの完了を優先
-6. 優先度の高いタスクを優先
-7. 長時間放置されているタスクに注意を促す
+5. PRのCIステータスがFAILUREの場合、CI修正を促す
+6. PRのCIステータスがPENDINGの場合、CI完了待ちであることを通知
+7. 進行中のタスクの完了を優先
+8. 優先度の高いタスクを優先
+9. 長時間放置されているタスクに注意を促す
 
 ## 現在のタスク一覧
 `)
