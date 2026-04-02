@@ -42,6 +42,17 @@
 - サポートが安定していれば: LLM tool use で Story CRUD を会話から実行（統合後は操作対象が1系統）
 - フォールバック案: スラッシュコマンド方式（`/create タスク名`）をフロントエンド側でパース
 
+#### Phase 2d: 組織内 PR スキャン → レビュータスク自動生成
+- `gh search prs --org <組織名> --state open --sort updated` で組織内のオープン PR を取得
+- 初回は直近1週間分を取得、以降は前回実行時刻からの差分のみ（`--updated >YYYY-MM-DD` で絞り込み）
+- bot ユーザーの PR はスキップ（author が `[bot]` suffix または設定ファイルで除外リスト定義）
+- 取得した PR ごとに「レビュー対応」Story（レイヤー0個 = 単タスク）を自動作成
+  - 既に同じ PR URL が紐づいた Story が存在する場合はスキップ（重複防止）
+  - タイトル例: `[Review] リポジトリ名 #123: PRタイトル`
+- 前回実行時刻は SQLite に保存（`key_value` テーブルまたは `settings` テーブル）
+- UI: 手動実行ボタン（「組織PRスキャン」）+ 結果通知
+- Phase 2.5（Task/Story 統合）完了後に着手が前提
+
 #### Phase 2 後回し（必要に応じて）
 - macOS デスクトップ通知 (osascript)
 - ローリングサマリーの自動化
@@ -148,6 +159,9 @@ gh pr view <url> --json number,title,state,isDraft,mergeable,reviewDecision,url,
 
 ### Phase 2c で対応予定
 - → Roadmap の Phase 2c を参照（Phase 2.5 完了後に着手）
+
+### Phase 2d で対応予定
+- 組織内 PR スキャン → レビュータスク自動生成（Phase 2.5 完了後に着手）
 
 ### 将来の検討事項
 - Chrome SpeechRecognition API のブラウザ制限 (Phase 3)
