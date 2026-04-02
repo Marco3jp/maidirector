@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import type { CreateTaskRequest } from '../api/types';
+import type { Task, CreateTaskRequest } from '../api/types';
 import { api } from '../api/client';
 
 interface Props {
-  onCreated: () => void;
+  onCreated: (task: Task) => void;
 }
 
 export function TaskForm({ onCreated }: Props) {
@@ -12,10 +12,11 @@ export function TaskForm({ onCreated }: Props) {
   const [project, setProject] = useState('');
   const [priority, setPriority] = useState(3);
   const [expanded, setExpanded] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || submitting) return;
 
     const data: CreateTaskRequest = {
       title: title.trim(),
@@ -24,16 +25,19 @@ export function TaskForm({ onCreated }: Props) {
       priority,
     };
 
+    setSubmitting(true);
     try {
-      await api.createTask(data);
+      const created = await api.createTask(data);
       setTitle('');
       setDescription('');
       setProject('');
       setPriority(3);
       setExpanded(false);
-      onCreated();
+      onCreated(created);
     } catch (e) {
       console.error('Failed to create task:', e);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -47,7 +51,9 @@ export function TaskForm({ onCreated }: Props) {
           onChange={(e) => setTitle(e.target.value)}
           onFocus={() => setExpanded(true)}
         />
-        <button type="submit" disabled={!title.trim()}>追加</button>
+        <button type="submit" disabled={!title.trim() || submitting}>
+          {submitting ? '追加中...' : '追加'}
+        </button>
       </div>
 
       {expanded && (

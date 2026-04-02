@@ -1,35 +1,40 @@
 package api
 
 import (
+	gocontext "context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/Marco3jp/maidirector/internal/config"
 	"github.com/Marco3jp/maidirector/internal/context"
 	"github.com/Marco3jp/maidirector/internal/llm"
 	"github.com/Marco3jp/maidirector/internal/task"
+	"github.com/Marco3jp/maidirector/internal/vectorstore"
 	"github.com/Marco3jp/maidirector/internal/ws"
 )
 
 type Server struct {
-	cfg        *config.Config
-	taskSvc    *task.Service
-	ctxMgr     *context.Manager
-	llmClient  llm.Provider
-	wsHub      *ws.Hub
-	httpServer *http.Server
+	cfg         *config.Config
+	taskSvc     *task.Service
+	ctxMgr      *context.Manager
+	llmClient   llm.Provider
+	vectorStore *vectorstore.VectorStore
+	wsHub       *ws.Hub
+	httpServer  *http.Server
 }
 
-func NewServer(cfg *config.Config, taskSvc *task.Service, ctxMgr *context.Manager, llmClient llm.Provider, staticFS ...fs.FS) *Server {
+func NewServer(cfg *config.Config, taskSvc *task.Service, ctxMgr *context.Manager, llmClient llm.Provider, vs *vectorstore.VectorStore, staticFS ...fs.FS) *Server {
 	s := &Server{
-		cfg:       cfg,
-		taskSvc:   taskSvc,
-		ctxMgr:    ctxMgr,
-		llmClient: llmClient,
-		wsHub:     ws.NewHub(),
+		cfg:         cfg,
+		taskSvc:     taskSvc,
+		ctxMgr:      ctxMgr,
+		llmClient:   llmClient,
+		vectorStore: vs,
+		wsHub:       ws.NewHub(),
 	}
 
 	mux := http.NewServeMux()
@@ -103,6 +108,8 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	go s.vectorizeTask(&t)
+
 	s.wsHub.Broadcast(ws.Message{Type: "task_created", Payload: t})
 	writeJSON(w, http.StatusCreated, t)
 }
@@ -148,6 +155,8 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	go s.vectorizeTask(existing)
+
 	s.wsHub.Broadcast(ws.Message{Type: "task_updated", Payload: existing})
 	writeJSON(w, http.StatusOK, existing)
 }
@@ -179,6 +188,8 @@ func (s *Server) handleAddContext(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	go s.vectorizeContextEntry(&entry)
 
 	writeJSON(w, http.StatusCreated, entry)
 }
@@ -265,6 +276,42 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	data, _ := json.Marshal(map[string]string{"done": result.Reply})
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	flusher.Flush()
+}
+
+// --- vectorization ---
+
+func (s *Server) vectorizeTask(t *task.Task) {
+	content := t.Title
+	if t.Description != "" {
+		content += "\n" + t.Description
+	}
+	if t.Project != "" {
+		content = "[" + t.Project + "] " + content
+	}
+
+	if err := s.vectorStore.Upsert(gocontext.Background(), vectorstore.PointPayload{
+		SourceType: "task",
+		SourceID:   t.ID,
+		Project:    t.Project,
+		Content:    content,
+		CreatedAt:  t.CreatedAt.Format(time.RFC3339),
+	}); err != nil {
+		log.Printf("warning: failed to vectorize task %s: %v", t.ID, err)
+	}
+}
+
+func (s *Server) vectorizeContextEntry(e *task.ContextEntry) {
+	content := fmt.Sprintf("[%s] %s", e.EntryType, e.Content)
+
+	if err := s.vectorStore.Upsert(gocontext.Background(), vectorstore.PointPayload{
+		SourceType: "context_entry",
+		SourceID:   e.ID,
+		TaskID:     e.TaskID,
+		Content:    content,
+		CreatedAt:  e.CreatedAt.Format(time.RFC3339),
+	}); err != nil {
+		log.Printf("warning: failed to vectorize context entry %s: %v", e.ID, err)
+	}
 }
 
 // --- helpers ---

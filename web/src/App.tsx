@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Task } from './api/types';
 import { api } from './api/client';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -14,6 +14,7 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('');
   const [activeTab, setActiveTab] = useState<'suggest' | 'chat'>('suggest');
+  const suppressWsRefreshRef = useRef(false);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -28,7 +29,21 @@ function App() {
     loadTasks();
   }, [loadTasks]);
 
+  const handleTaskCreated = useCallback((newTask: Task) => {
+    if (!filterStatus || filterStatus === newTask.status) {
+      setTasks((prev) => {
+        if (prev.some((t) => t.id === newTask.id)) return prev;
+        return [newTask, ...prev];
+      });
+    }
+    suppressWsRefreshRef.current = true;
+    setTimeout(() => { suppressWsRefreshRef.current = false; }, 500);
+  }, [filterStatus]);
+
   useWebSocket((msg) => {
+    if (msg.type === 'task_created' && suppressWsRefreshRef.current) {
+      return;
+    }
     if (msg.type === 'task_created' || msg.type === 'task_updated' || msg.type === 'task_deleted') {
       loadTasks();
     }
@@ -61,7 +76,7 @@ function App() {
             </div>
           </div>
 
-          <TaskForm onCreated={loadTasks} />
+          <TaskForm onCreated={handleTaskCreated} />
 
           <div className="task-sections">
             {activeTasks.length > 0 && (

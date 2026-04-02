@@ -5,20 +5,20 @@
 
 ## Status
 
-- **現在のフェーズ**: Phase 1 (MVP) - 動作確認完了
-- **直近の完了**: Phase 1 MVP のフルスタック実装 + 動作確認（タスクCRUD、LLM提案、チャット全て動作）
-- **次にやること**: タスク作成時のベクトル化追加、UIのリフレッシュ改善、Phase 2 の GitHub 連携検討
+- **現在のフェーズ**: Phase 1 (MVP) 全完了 → Phase 2 着手待ち
+- **直近の完了**: Phase 1 残作業（ベクトル化・UI改善・favicon）を実装し Phase 1 を完全に閉じた
+- **次にやること**: Phase 2 着手（gh コマンド連携、ストーリー/レイヤー依存グラフ、チャットからのタスク操作）
 
 ## Roadmap
 
-### Phase 1: MVP
+### Phase 1: MVP ✅
 - Go backend: API server + SQLite + Qdrant + Ollama 連携
 - React dashboard: タスク CRUD +「次に何すべき？」ボタン + チャット
 - 手動入力のみ、外部連携なし
 - 単一バイナリ (embed.FS)
 - **完了条件**: タスクを入れたら LLM がセマンティック検索で文脈を理解して次にやることを教えてくれる
 
-### Phase 2: 外部連携 + 構造的依存認識 + 自律動作
+### Phase 2: 外部連携 + 構造的依存認識 ← 次
 - **GitHub 連携 (gh コマンド経由、イベント駆動)**: Suggest/チャット時に PR 状態を取得
 - **レイヤー依存グラフ**: proto → microservice → gateway → frontend の構造的ブロッキング自動認識（後述）
 - **ストーリー管理**: 施策単位でレイヤーごとの PR 進捗をパイプラインビューで表示
@@ -43,23 +43,28 @@
 
 - 2026-04-02: バックエンドに Go を採用。cmd/ + internal/ パターン、単一バイナリ配布の利点。
 - 2026-04-02: フロントエンドに React + Vite SPA を採用。将来の音声統合に有利、Go embed.FS でバイナリに同梱。
-- 2026-04-02: Chat LLM に Ollama (qwen2.5:14b) を採用。ローカル無料、日本語に強い14Bモデル。Provider インターフェース抽象化で後から差替可能。
-- 2026-04-02: Embedding に Ollama (nomic-embed-text, 768次元) を採用。Ollama の /api/embeddings で統一。
-- 2026-04-02: 構造化 Storage に SQLite (modernc.org/sqlite, CGO不要) を採用。
-- 2026-04-02: ベクトル Storage に既存 Qdrant Docker インスタンス (localhost:6333) を流用。コレクション名は `maidirector`。
+- 2026-04-02: Chat LLM に Ollama (qwen2.5:14b) を採用。ローカル無料、日本語に強い14Bモデル。Provider インターフェース抽象化で後から差替可能。動作確認は qwen2.5:7b で実施済み。
+- 2026-04-02: Embedding に Ollama (nomic-embed-text, 768次元) を採用。Ollama の /api/embed エンドポイントで統一。
+- 2026-04-02: タスク管理の正規ストアに SQLite (modernc.org/sqlite, CGO不要) を採用。タスクCRUD、会話履歴、サマリーなど構造化データの永続化。
+- 2026-04-02: セマンティック検索用の記憶層に既存 Qdrant Docker インスタンス (localhost:6333) を流用。タスク説明文・メモ・会話をベクトル化し「意味的に関連する過去の文脈」を引き出す用途。タスク管理自体は SQLite が担う。コレクション名は `maidirector`。
 - 2026-04-02: プロジェクト名を maidirector に決定。メイドラゴンリスペクト。
+- 2026-04-02: Qdrant Go client (gRPC依存) ではなく REST API を直接叩く実装を採用。依存の軽さを優先。
+- 2026-04-02: GitHub 連携に gh CLI コマンドを採用。ローカルに導入・認証済みのため OAuth トークン管理不要。Go から os/exec で呼ぶだけでプライベートリポジトリにもアクセス可能。
+- 2026-04-02: GitHub PR 状態取得はポーリングではなくイベント駆動を採用。Suggest 押下時・PR URL 貼付時・チャット質問時に都度 gh コマンドで取得。バックグラウンドプロセス不要。
+- 2026-04-02: ベクトル化の対象をタスク・コンテキスト・会話の3種に拡大。タスク/コンテキストは `api.Server` が `vectorStore` を直接保持して goroutine で非同期 upsert。会話は従来通り `context.Manager` 経由。`SourceID` が設定されたポイントはべき等更新（タスク更新時に同一ポイントIDで上書き）。
 
 ## Tech Stack
 
-| 要素 | 選定 | バージョン/備考 |
-|------|------|----------------|
-| Backend | Go + Cobra CLI + net/http | go 1.22+ |
-| Frontend | React + Vite + TypeScript | - |
-| Chat LLM | Ollama / qwen2.5:14b | ローカル無料 |
-| Embedding | Ollama / nomic-embed-text | 768次元 |
-| 構造化DB | SQLite (modernc.org/sqlite) | CGO不要 |
-| ベクトルDB | Qdrant | v1.17.0 (既存Docker) |
-| Config | YAML (gopkg.in/yaml.v3) | - |
+| 要素 | 選定 | 役割 |
+|------|------|------|
+| Backend | Go + Cobra CLI + net/http | API サーバー、単一バイナリ (go 1.26) |
+| Frontend | React + Vite + TypeScript | ダッシュボード SPA |
+| Chat LLM | Ollama / qwen2.5:14b (7b で検証済み) | 提案・チャットの推論 |
+| Embedding | Ollama / nomic-embed-text | テキスト → 768次元ベクトル変換 |
+| タスク管理DB | SQLite (modernc.org/sqlite) | タスク・会話・サマリーの CRUD (正規ストア) |
+| セマンティック検索 | Qdrant v1.17.0 (既存Docker) | 過去の文脈をベクトル検索で引き出す記憶層 |
+| GitHub 連携 | gh CLI (os/exec経由) | PR状態取得、イベント駆動 (Phase 2) |
+| Config | YAML (gopkg.in/yaml.v3) | 設定ファイル |
 
 ## Feature Design: レイヤー依存グラフ（優先度: 高）
 
@@ -164,18 +169,26 @@ Phase 2 の GitHub 連携と同時に着手。まずは手動でストーリー/
 
 ## Known Issues / TODO
 
-- Ollama ストリーミングレスポンスは実装済み（SSE 経由）。実際の動作テストが必要
-- Qdrant REST API を直接叩く実装にした（go-client は gRPC 依存が重いため）
-- タスク作成時のベクトル化は未実装（context_entry 追加時と会話時のみ）。タスク自体もベクトル化すべきか要検討
-- ローリングサマリーの自動化タイミング (Phase 2)
+### Phase 1 残作業 ✅
+- ~~タスク作成時のベクトル化~~ → 実装済み（タスク作成/更新時に Qdrant upsert、SourceID でべき等更新）
+- ~~context_entry のベクトル化~~ → 実装済み（メモ追加時に Qdrant upsert）
+- ~~UI のリスト更新~~ → 楽観的更新に改善（作成レスポンスを即座に反映 + WebSocket重複抑制）
+- ~~favicon~~ → maidirector 用 SVG に差し替え
+
+### 軽微な残課題
+- タスク削除時に Qdrant のベクトルポイントが残る（`handleDeleteTask` で Qdrant 側の削除が未実装）
+- タスクに紐づく context_entry のベクトルもタスク削除時に残る（CASCADE 削除は SQLite のみ）
+
+### Phase 2 で対応予定
+- チャットからのタスク操作（LLM tool use or フロントエンド側パース）
+- ローリングサマリーの自動化タイミング設計
+
+### 将来の検討事項
 - Chrome SpeechRecognition API のブラウザ制限 (Phase 3)
-- `web/dist` の `.gitignore` 設定が必要
-- Vite の favicon.svg がデフォルトのまま
-- チャットからのタスク操作が未実装（LLM tool use or フロントエンド側パース、Phase 2 で対応予定）
 
 ## Session Log
 
-### 2026-04-02: 初回セッション - 計画策定 + Phase 1 MVP 実装
+### 2026-04-02: 初回セッション - 計画策定 + Phase 1 MVP 実装 + 動作確認
 - プロジェクトの要件定義と議論
 - 技術選定の決定 (Go + React + Ollama + SQLite + Qdrant)
 - アーキテクチャ設計、データモデル設計、API 設計
@@ -191,6 +204,24 @@ Phase 2 の GitHub 連携と同時に着手。まずは手動でストーリー/
   - タスクCRUD (API + UI両方で動作確認済み)
   - 「次にやること」提案機能 (Ollama qwen2.5:7b でSSEストリーミング動作)
   - チャット機能 (タスク状況を踏まえた応答を確認)
-  - Qdrant コレクション自動作成 + ベクトル検索疎通
+  - Qdrant コレクション自動作成 + 会話のベクトル化疎通
+- Phase 2 の設計議論:
+  - レイヤー依存グラフの設計（proto → microservice → gateway → frontend）
+  - gh コマンドによる GitHub 連携方針の決定（イベント駆動、ポーリングなし）
+  - チャットからのタスク操作の方向性整理
 - 確認時に qwen2.5:7b を使用（14bは後日pullして切替）
-- 残課題: タスク作成時のベクトル化、UIからのタスク作成後のリストリフレッシュ改善、favicon
+
+### 2026-04-02: Phase 1 残作業の実装
+- タスク作成/更新時のベクトル化を実装:
+  - `api.Server` に `vectorStore` を注入し、`handleCreateTask`/`handleUpdateTask` で goroutine でベクトル化
+  - `vectorstore.Upsert` を改修: `SourceID` が設定されていればそれをポイントIDとして使用（べき等更新可能に）
+  - タスクのタイトル+説明+プロジェクト名をベクトル化コンテンツとして構成
+- context_entry（メモ）のベクトル化を実装:
+  - `handleAddContext` で goroutine でベクトル化、`source_type: "context_entry"` として Qdrant に保存
+  - ドキュメントには「context_entry 追加時にベクトル化」と記載されていたが、実際のコードでは未実装だったため修正
+- UI の楽観的更新を実装:
+  - `TaskForm` が `createTask` のレスポンス（作成されたタスク）を `onCreated` 経由で親に返すように変更
+  - `App.tsx` でレスポンスのタスクを即座に state に追加（サーバーからの再取得を待たない）
+  - WebSocket の `task_created` による重複リフレッシュを 500ms 間抑制
+  - 送信中の二重送信防止（`submitting` state）を追加
+- favicon を maidirector 用の SVG に差し替え

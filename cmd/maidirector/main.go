@@ -70,7 +70,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load embedded frontend: %w", err)
 	}
 
-	server := api.NewServer(cfg, taskService, ctxManager, llmClient, staticFS)
+	server := api.NewServer(cfg, taskService, ctxManager, llmClient, vs, staticFS)
 
 	log.Printf("maidirector サーバー起動: http://localhost:%d", cfg.Server.Port)
 	return server.ListenAndServe()

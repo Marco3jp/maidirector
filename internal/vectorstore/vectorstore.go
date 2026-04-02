@@ -92,7 +92,10 @@ func (vs *VectorStore) Upsert(ctx context.Context, payload PointPayload) error {
 		return fmt.Errorf("embedding failed: %w", err)
 	}
 
-	pointID := uuid.New().String()
+	pointID := payload.SourceID
+	if pointID == "" {
+		pointID = uuid.New().String()
+	}
 
 	body := map[string]any{
 		"points": []map[string]any{
