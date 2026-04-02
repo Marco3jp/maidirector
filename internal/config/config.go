@@ -11,7 +11,14 @@ type Config struct {
 	LLM         LLMConfig          `yaml:"llm"`
 	Store       StoreConfig        `yaml:"store"`
 	Qdrant      QdrantConfig       `yaml:"qdrant"`
+	GitHub      GitHubConfig       `yaml:"github"`
 	LayerChains []LayerChainConfig `yaml:"layer_chains"`
+}
+
+type GitHubConfig struct {
+	Org            string   `yaml:"org"`
+	ExcludeAuthors []string `yaml:"exclude_authors"`
+	BotPolicy      string   `yaml:"bot_policy"` // "exclude" (default) or priority number: 1 (highest) - 5 (lowest)
 }
 
 type LayerChainConfig struct {

@@ -14,6 +14,8 @@ function App() {
   const [stories, setStories] = useState<Story[]>([]);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('');
   const [activeTab, setActiveTab] = useState<'suggest' | 'chat'>('suggest');
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<string | null>(null);
   const suppressWsRefreshRef = useRef(false);
 
   const loadStories = useCallback(async () => {
@@ -37,6 +39,25 @@ function App() {
     suppressWsRefreshRef.current = true;
     setTimeout(() => { suppressWsRefreshRef.current = false; }, 500);
   }, []);
+
+  const handleScanOrgPRs = useCallback(async () => {
+    setScanning(true);
+    setScanResult(null);
+    try {
+      const result = await api.scanOrgPRs();
+      setScanResult(`${result.scanned}件スキャン → ${result.created}件作成 / ${result.skipped}件スキップ`);
+      if (result.created > 0) {
+        loadStories();
+      }
+      setTimeout(() => setScanResult(null), 5000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'スキャンに失敗しました';
+      setScanResult(msg);
+      setTimeout(() => setScanResult(null), 5000);
+    } finally {
+      setScanning(false);
+    }
+  }, [loadStories]);
 
   useWebSocket((msg) => {
     if (msg.type === 'story_created' && suppressWsRefreshRef.current) {
@@ -62,18 +83,33 @@ function App() {
         <section className="panel panel-tasks">
           <div className="panel-header">
             <h2>ストーリー</h2>
-            <div className="filter-bar">
-              {(['' , 'active', 'completed', 'archived'] as FilterStatus[]).map((s) => (
-                <button
-                  key={s}
-                  className={`filter-btn ${filterStatus === s ? 'active' : ''}`}
-                  onClick={() => setFilterStatus(s)}
-                >
-                  {s === '' ? 'すべて' : s === 'active' ? 'アクティブ' : s === 'completed' ? '完了' : 'アーカイブ'}
-                </button>
-              ))}
+            <div className="panel-header-actions">
+              <button
+                className="btn-scan-org"
+                onClick={handleScanOrgPRs}
+                disabled={scanning}
+              >
+                {scanning ? '🔍 スキャン中...' : '🔍 組織PRスキャン'}
+              </button>
+              <div className="filter-bar">
+                {(['' , 'active', 'completed', 'archived'] as FilterStatus[]).map((s) => (
+                  <button
+                    key={s}
+                    className={`filter-btn ${filterStatus === s ? 'active' : ''}`}
+                    onClick={() => setFilterStatus(s)}
+                  >
+                    {s === '' ? 'すべて' : s === 'active' ? 'アクティブ' : s === 'completed' ? '完了' : 'アーカイブ'}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
+
+          {scanResult && (
+            <div className="scan-result-banner">
+              {scanResult}
+            </div>
+          )}
 
           <StoryForm onCreated={handleStoryCreated} />
 

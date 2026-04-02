@@ -13,6 +13,9 @@ type StoryStore interface {
 	DeleteStoryLayer(id string) error
 	CreateContextEntry(e *ContextEntry) error
 	ListContextEntries(storyID string) ([]*ContextEntry, error)
+	SetSetting(key, value string) error
+	GetSetting(key string) (string, error)
+	FindStoryByPRURL(prURL string) (string, error)
 }
 
 type StoryService struct {
@@ -69,4 +72,16 @@ func (s *StoryService) AddContext(entry *ContextEntry) error {
 
 func (s *StoryService) ListContext(storyID string) ([]*ContextEntry, error) {
 	return s.store.ListContextEntries(storyID)
+}
+
+func (s *StoryService) SetSetting(key, value string) error {
+	return s.store.SetSetting(key, value)
+}
+
+func (s *StoryService) GetSetting(key string) (string, error) {
+	return s.store.GetSetting(key)
+}
+
+func (s *StoryService) FindByPRURL(prURL string) (string, error) {
+	return s.store.FindStoryByPRURL(prURL)
 }

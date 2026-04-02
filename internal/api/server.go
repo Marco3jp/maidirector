@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Marco3jp/maidirector/internal/config"
@@ -52,6 +54,7 @@ func NewServer(cfg *config.Config, storySvc *task.StoryService, ctxMgr *context.
 	mux.HandleFunc("DELETE /api/stories/{storyId}/layers/{layerId}", s.handleDeleteLayer)
 	mux.HandleFunc("POST /api/stories/{storyId}/layers/{layerId}/refresh-pr", s.handleRefreshLayerPR)
 	mux.HandleFunc("POST /api/stories/refresh-prs", s.handleRefreshAllPRs)
+	mux.HandleFunc("POST /api/stories/scan-org-prs", s.handleScanOrgPRs)
 	mux.HandleFunc("POST /api/stories/{id}/context", s.handleAddContext)
 	mux.HandleFunc("GET /api/stories/{id}/context", s.handleListContext)
 	mux.HandleFunc("GET /api/layer-chains", s.handleGetLayerChains)
@@ -383,6 +386,118 @@ func (s *Server) handleRefreshAllPRs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stories)
+}
+
+// --- Org PR Scan ---
+
+const settingLastScanTime = "last_org_pr_scan_time"
+
+func (s *Server) handleScanOrgPRs(w http.ResponseWriter, r *http.Request) {
+	org := s.cfg.GitHub.Org
+	if org == "" {
+		writeError(w, http.StatusBadRequest, "github.org is not configured")
+		return
+	}
+	if s.ghClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "GitHub CLI not available")
+		return
+	}
+
+	since := time.Now().AddDate(0, 0, -7)
+
+	lastScan, err := s.storySvc.GetSetting(settingLastScanTime)
+	if err != nil {
+		log.Printf("warning: failed to get last scan time: %v", err)
+	}
+	if lastScan != "" {
+		if t, err := time.Parse(time.RFC3339, lastScan); err == nil {
+			if t.After(since) {
+				since = t
+			}
+		}
+	}
+
+	prs, err := s.ghClient.SearchOrgPRs(org, since)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to search PRs: %v", err))
+		return
+	}
+
+	excludeSet := make(map[string]bool)
+	for _, author := range s.cfg.GitHub.ExcludeAuthors {
+		excludeSet[strings.ToLower(author)] = true
+	}
+
+	botPolicy := s.cfg.GitHub.BotPolicy
+	if botPolicy == "" {
+		botPolicy = "exclude"
+	}
+	botPriority := 0
+	botInclude := false
+	if botPolicy != "exclude" {
+		if p, err := strconv.Atoi(botPolicy); err == nil {
+			botInclude = true
+			botPriority = p
+		}
+	}
+
+	created := 0
+	skipped := 0
+
+	for _, pr := range prs {
+		if excludeSet[strings.ToLower(pr.Author)] {
+			skipped++
+			continue
+		}
+
+		isBot := github.IsBotAuthor(pr.Author)
+		if isBot && !botInclude {
+			skipped++
+			continue
+		}
+
+		existingID, err := s.storySvc.FindByPRURL(pr.URL)
+		if err != nil {
+			log.Printf("warning: failed to check existing story for PR %s: %v", pr.URL, err)
+			continue
+		}
+		if existingID != "" {
+			skipped++
+			continue
+		}
+
+		title := fmt.Sprintf("[Review] %s #%d: %s", pr.Repo, pr.Number, pr.Title)
+		st := &task.Story{
+			Title:  title,
+			Status: task.StoryStatusActive,
+			Links:  []string{pr.URL},
+			Tags:   []string{"review"},
+		}
+		if isBot {
+			st.Priority = botPriority
+			st.Tags = []string{"review", "bot"}
+		}
+		if err := s.storySvc.Create(st); err != nil {
+			log.Printf("warning: failed to create review story for PR %s: %v", pr.URL, err)
+			continue
+		}
+		st.Layers = []*task.StoryLayer{}
+
+		go s.vectorizeStory(st)
+		s.wsHub.Broadcast(ws.Message{Type: "story_created", Payload: st})
+		created++
+	}
+
+	if err := s.storySvc.SetSetting(settingLastScanTime, time.Now().Format(time.RFC3339)); err != nil {
+		log.Printf("warning: failed to save last scan time: %v", err)
+	}
+
+	result := map[string]any{
+		"scanned": len(prs),
+		"created": created,
+		"skipped": skipped,
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // --- Suggest / Chat handlers ---

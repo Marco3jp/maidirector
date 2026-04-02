@@ -66,3 +66,9 @@ export interface LayerChain {
 export interface ChatRequest {
   message: string;
 }
+
+export interface ScanOrgPRsResult {
+  scanned: number;
+  created: number;
+  skipped: number;
+}

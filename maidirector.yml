@@ -19,3 +19,9 @@ layer_chains:
     layers: [proto, microservice, gateway, frontend]
   - name: simple
     layers: [backend, frontend]
+
+github:
+  org: your-org
+  exclude_authors: []
+  # bot_policy: "exclude" (default) or priority number: 1 (highest) - 5 (lowest)
+  # bot_policy: exclude

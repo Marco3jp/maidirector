@@ -122,6 +122,12 @@ func (s *Store) migrate() error {
 		`ALTER TABLE stories ADD COLUMN links TEXT DEFAULT '[]'`,
 		`ALTER TABLE stories ADD COLUMN tags TEXT DEFAULT '[]'`,
 		`ALTER TABLE stories ADD COLUMN last_active_at DATETIME`,
+		// Phase 2c: settings テーブル
+		`CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
 
 	for _, m := range migrations {
@@ -385,7 +391,7 @@ func (s *Store) ListStories(status string) ([]*task.Story, error) {
 		query += ` AND status = ?`
 		args = append(args, status)
 	}
-	query += ` ORDER BY priority ASC, updated_at DESC`
+	query += ` ORDER BY priority ASC, created_at ASC`
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -519,6 +525,51 @@ func (s *Store) GetStoryLayer(id string) (*task.StoryLayer, error) {
 		 FROM story_layers WHERE id = ?`, id,
 	)
 	return scanStoryLayer(row)
+}
+
+// --- Settings ---
+
+func (s *Store) SetSetting(key, value string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		key, value, time.Now(),
+	)
+	return err
+}
+
+func (s *Store) GetSetting(key string) (string, error) {
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return value, err
+}
+
+// --- PR URL duplicate check ---
+
+func (s *Store) FindStoryByPRURL(prURL string) (string, error) {
+	var id string
+	err := s.db.QueryRow(
+		`SELECT s.id FROM stories s, json_each(s.links) j WHERE j.value = ? LIMIT 1`,
+		prURL,
+	).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", err
+	}
+
+	err = s.db.QueryRow(
+		`SELECT story_id FROM story_layers WHERE pr_url = ? LIMIT 1`,
+		prURL,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return id, err
 }
 
 // --- scan helpers ---
