@@ -18,12 +18,14 @@
 - 単一バイナリ (embed.FS)
 - **完了条件**: タスクを入れたら LLM がセマンティック検索で文脈を理解して次にやることを教えてくれる
 
-### Phase 2: 外部連携 + 自律動作
-- GitHub 連携 (PR/Issue/レビューのポーリング)
-- Background scheduler (定期的に GitHub 確認、リマインド生成)
+### Phase 2: 外部連携 + 構造的依存認識 + 自律動作
+- **GitHub 連携 (gh コマンド経由、イベント駆動)**: Suggest/チャット時に PR 状態を取得
+- **レイヤー依存グラフ**: proto → microservice → gateway → frontend の構造的ブロッキング自動認識（後述）
+- **ストーリー管理**: 施策単位でレイヤーごとの PR 進捗をパイプラインビューで表示
+- **チャットからのタスク操作**: LLM tool use でタスクCRUD/ストーリー登録を会話から実行
 - macOS デスクトップ通知 (osascript)
 - ローリングサマリーの自動化
-- **完了条件**: GitHub の状態変化を検知して自動的にタスク/リマインドが生成される
+- **完了条件**: PR URL を貼れば依存構造を認識し、「次にどのPRを見ればいいか」を自動提案できる
 
 ### Phase 3: 音声 + 高度な機能
 - 音声入力 (Chrome SpeechRecognition API)
@@ -59,6 +61,107 @@
 | ベクトルDB | Qdrant | v1.17.0 (既存Docker) |
 | Config | YAML (gopkg.in/yaml.v3) | - |
 
+## Feature Design: レイヤー依存グラフ（優先度: 高）
+
+### 課題
+
+施策（ストーリー）の開発は proto → microservice/gateway → backend → frontend のようにレイヤーごとに構造的なブロッキング関係がある。例:
+
+- proto の PR がマージされないと microservice や gateway の PR がマージできない
+- microservice/gateway が完了しないと frontend の PR がマージできない
+
+これが複数のストーリーで並行して進行するため、「今どのストーリーのどのレイヤーまで進んでいるか」「次にどのPRを見ればいいか」の把握が困難になる。
+
+現状は手動でタスクの優先順位やブロッキングを入力しているが、この依存関係はプロジェクト構造から自動的に認識させたい。
+
+### 設計の方向性
+
+```
+ストーリーA ─┬─ proto (PR #101)          ← マージ済み
+             ├─ microservice (PR #102)   ← レビュー中 ← 次にやるべき
+             ├─ gateway (PR #103)        ← ブロック中（microservice待ち）
+             └─ frontend (PR #104)       ← ブロック中（gateway待ち）
+
+ストーリーB ─┬─ proto (PR #201)          ← レビュー中 ← 次にやるべき
+             ├─ microservice (PR #202)   ← 未着手
+             └─ frontend (PR #203)       ← 未着手
+```
+
+1. **レイヤー定義**: プロジェクトごとにレイヤーの依存順序を設定ファイルで定義
+   ```yaml
+   layer_chains:
+     - name: default
+       layers: [proto, microservice, gateway, frontend]
+     - name: simple
+       layers: [backend, frontend]
+   ```
+
+2. **ストーリー単位のグルーピング**: タスク/PRをストーリー（施策）単位でグルーピングし、各レイヤーの進捗を一元管理
+
+3. **GitHub PR との紐付け**:
+   - ユーザーが PR の URL を貼る → `gh` コマンドで PR 情報を取得してレイヤーに紐付け
+   - ブランチ名やラベルからレイヤーを推定（例: `feature/story-a/proto`）も補助的に使う
+   - PR 状態の取得は `gh pr view <url> --json state,mergeable,reviews` で実現
+
+4. **自動ブロッキング判定**: 上流レイヤーの PR がマージ済みかどうかで下流レイヤーのブロック状態を自動判定
+
+5. **ダッシュボード表示**: ストーリーごとのパイプラインビュー（各レイヤーの状態を横並びで表示）
+
+### データモデル拡張案
+
+```
+stories テーブル
+  - id, title, description, layer_chain (参照する依存チェーン名)
+
+story_layers テーブル
+  - id, story_id, layer_name, status (pending/in_progress/review/merged)
+  - pr_url, pr_number, pr_state
+  - blocked_by (上流layer_id)
+```
+
+### 「次にやること」への統合
+
+Suggest ロジックに組み込む:
+- 上流がマージ済みで下流が未着手 → 「ストーリーAのmicroserviceに取り掛かれます」
+- 上流がレビュー中 → 「ストーリーAのproto PRにレビューが必要です」
+- 全レイヤー完了 → 自動的にストーリーを完了扱い
+
+### GitHub 連携方針: gh コマンド + イベント駆動
+
+ポーリングではなく、ユーザーアクション起点で PR 状態を取得する方針。
+
+**なぜ gh コマンドか:**
+- ローカルに gh CLI が導入済み、認証もセットアップ済み
+- OAuth トークン管理が不要（gh auth の仕組みに乗れる）
+- 対象のリポジトリにプライベートなものが多いので gh コマンド経由が自然
+- Go から `os/exec` で呼ぶだけなので実装がシンプル
+
+**取得タイミング（イベント駆動）:**
+- 「提案してもらう」ボタン押下時 → Suggest 前に全紐付き PR の最新状態を gh で取得
+- PR URL をタスクやストーリーに貼り付けた時 → その場で PR 情報を取得・表示
+- チャットで「ストーリーAの状況教えて」→ gh で各レイヤー PR の状態を取得してからLLMに渡す
+
+**gh コマンド活用例:**
+```bash
+# PR の状態取得
+gh pr view <url> --json state,title,mergeable,reviewDecision,statusCheckRollup
+
+# 自分に関連する PR 一覧
+gh pr list --author @me --json number,title,url,headRefName,state
+
+# 特定リポジトリの PR 検索
+gh pr list --repo <owner>/<repo> --search "label:story-a" --json number,title,url,state
+```
+
+**段階的な自動化:**
+1. まず: URL を手動で貼る → gh で情報取得・表示
+2. 次に: ブランチ命名規約から自動でストーリー/レイヤーを推定
+3. 最終的に: `gh pr list` でアクティブな PR を定期スキャンし、未登録のストーリーを提案
+
+### 実装フェーズ
+
+Phase 2 の GitHub 連携と同時に着手。まずは手動でストーリー/レイヤーを登録 + URL 貼付けから始め、gh コマンド連携で自動化を進める。
+
 ## Known Issues / TODO
 
 - Ollama ストリーミングレスポンスは実装済み（SSE 経由）。実際の動作テストが必要
@@ -68,6 +171,7 @@
 - Chrome SpeechRecognition API のブラウザ制限 (Phase 3)
 - `web/dist` の `.gitignore` 設定が必要
 - Vite の favicon.svg がデフォルトのまま
+- チャットからのタスク操作が未実装（LLM tool use or フロントエンド側パース、Phase 2 で対応予定）
 
 ## Session Log
 
