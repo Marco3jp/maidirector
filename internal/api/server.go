@@ -1,0 +1,295 @@
+package api
+
+import (
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"log"
+	"net/http"
+
+	"github.com/Marco3jp/maidirector/internal/config"
+	"github.com/Marco3jp/maidirector/internal/context"
+	"github.com/Marco3jp/maidirector/internal/llm"
+	"github.com/Marco3jp/maidirector/internal/task"
+	"github.com/Marco3jp/maidirector/internal/ws"
+)
+
+type Server struct {
+	cfg        *config.Config
+	taskSvc    *task.Service
+	ctxMgr     *context.Manager
+	llmClient  llm.Provider
+	wsHub      *ws.Hub
+	httpServer *http.Server
+}
+
+func NewServer(cfg *config.Config, taskSvc *task.Service, ctxMgr *context.Manager, llmClient llm.Provider, staticFS ...fs.FS) *Server {
+	s := &Server{
+		cfg:       cfg,
+		taskSvc:   taskSvc,
+		ctxMgr:    ctxMgr,
+		llmClient: llmClient,
+		wsHub:     ws.NewHub(),
+	}
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /api/tasks", s.handleListTasks)
+	mux.HandleFunc("POST /api/tasks", s.handleCreateTask)
+	mux.HandleFunc("GET /api/tasks/{id}", s.handleGetTask)
+	mux.HandleFunc("PUT /api/tasks/{id}", s.handleUpdateTask)
+	mux.HandleFunc("DELETE /api/tasks/{id}", s.handleDeleteTask)
+	mux.HandleFunc("POST /api/tasks/{id}/context", s.handleAddContext)
+	mux.HandleFunc("GET /api/tasks/{id}/context", s.handleListContext)
+
+	mux.HandleFunc("POST /api/suggest", s.handleSuggest)
+	mux.HandleFunc("POST /api/chat", s.handleChat)
+
+	mux.HandleFunc("GET /ws", s.wsHub.HandleWS)
+
+	if len(staticFS) > 0 && staticFS[0] != nil {
+		mux.Handle("/", newSPAHandler(staticFS[0]))
+	} else {
+		mux.Handle("/", http.FileServer(http.Dir("web/dist")))
+	}
+
+	handler := corsMiddleware(mux)
+
+	s.httpServer = &http.Server{
+		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler: handler,
+	}
+
+	return s
+}
+
+func (s *Server) ListenAndServe() error {
+	return s.httpServer.ListenAndServe()
+}
+
+// --- Task handlers ---
+
+func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
+	status := r.URL.Query().Get("status")
+	project := r.URL.Query().Get("project")
+
+	tasks, err := s.taskSvc.List(status, project)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if tasks == nil {
+		tasks = []*task.Task{}
+	}
+
+	writeJSON(w, http.StatusOK, tasks)
+}
+
+func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
+	var t task.Task
+	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if t.Title == "" {
+		writeError(w, http.StatusBadRequest, "title is required")
+		return
+	}
+
+	if err := s.taskSvc.Create(&t); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.wsHub.Broadcast(ws.Message{Type: "task_created", Payload: t})
+	writeJSON(w, http.StatusCreated, t)
+}
+
+func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	t, err := s.taskSvc.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, t)
+}
+
+func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	existing, err := s.taskSvc.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	var updates task.Task
+	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	existing.Title = updates.Title
+	existing.Description = updates.Description
+	existing.Status = updates.Status
+	existing.Priority = updates.Priority
+	existing.Project = updates.Project
+	existing.Links = updates.Links
+	existing.Tags = updates.Tags
+	existing.BlockedBy = updates.BlockedBy
+
+	if err := s.taskSvc.Update(existing); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.wsHub.Broadcast(ws.Message{Type: "task_updated", Payload: existing})
+	writeJSON(w, http.StatusOK, existing)
+}
+
+func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	if err := s.taskSvc.Delete(id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.wsHub.Broadcast(ws.Message{Type: "task_deleted", Payload: map[string]string{"id": id}})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleAddContext(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+
+	var entry task.ContextEntry
+	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	entry.TaskID = taskID
+
+	if err := s.taskSvc.AddContext(&entry); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, entry)
+}
+
+func (s *Server) handleListContext(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+
+	entries, err := s.taskSvc.ListContext(taskID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if entries == nil {
+		entries = []*task.ContextEntry{}
+	}
+
+	writeJSON(w, http.StatusOK, entries)
+}
+
+// --- Suggest / Chat handlers ---
+
+func (s *Server) handleSuggest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	result, err := s.ctxMgr.SuggestStream(r.Context(), func(chunk string) {
+		data, _ := json.Marshal(map[string]string{"chunk": chunk})
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	})
+
+	if err != nil {
+		log.Printf("suggest error: %v", err)
+		data, _ := json.Marshal(map[string]string{"error": err.Error()})
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+		return
+	}
+
+	data, _ := json.Marshal(map[string]string{"done": result.Suggestion})
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
+}
+
+func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	var req context.ChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	result, err := s.ctxMgr.ChatStream(r.Context(), req.Message, func(chunk string) {
+		data, _ := json.Marshal(map[string]string{"chunk": chunk})
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	})
+
+	if err != nil {
+		log.Printf("chat error: %v", err)
+		data, _ := json.Marshal(map[string]string{"error": err.Error()})
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+		return
+	}
+
+	data, _ := json.Marshal(map[string]string{"done": result.Reply})
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
+}
+
+// --- helpers ---
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
