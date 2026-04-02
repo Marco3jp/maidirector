@@ -148,7 +148,7 @@ func (c *Client) SearchOrgPRs(org string, since time.Time) ([]*SearchPRItem, err
 		"--state", "open",
 		"--sort", "created",
 		"--order", "asc",
-		"--updated", ">"+sinceStr,
+		"--updated", ">="+sinceStr,
 		"--json", "number,title,state,isDraft,url,repository,author,createdAt,updatedAt",
 		"--limit", "100",
 	)

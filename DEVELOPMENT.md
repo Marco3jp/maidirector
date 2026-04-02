@@ -38,16 +38,15 @@
 
 #### Phase 2c: 組織内 PR スキャン → レビュータスク自動生成 ✅
 - `gh search prs --owner <組織名> --state open --sort created --order asc` で組織内のオープン PR を取得（古い順）
-- 初回は直近1週間分を取得、以降は前回実行時刻からの差分のみ（`--updated >YYYY-MM-DD` で絞り込み）
-- bot ユーザーの PR はスキップ（author が `[bot]` / `-bot` suffix または設定ファイルで除外リスト定義）
+- 初回は直近1週間分を取得、以降は前回実行時刻からの差分のみ（`--updated >=YYYY-MM-DD` で絞り込み、当日分も含む）
+- bot PR の扱いは `bot_policy` で設定: `exclude`（デフォルト: スキップ）または priority 数値（1=最高 〜 5=最低）で取り込み
 - 取得した PR ごとに「レビュー対応」Story（レイヤー0個 = 単タスク）を自動作成
   - 既に同じ PR URL が紐づいた Story（links JSON）または StoryLayer（pr_url）が存在する場合はスキップ（重複防止）
-  - タイトル例: `[Review] リポジトリ名 #123: PRタイトル`
-  - tags: `["review"]`、links: `[PR URL]`
+  - タイトル: `[Review] リポジトリ名 #123: PRタイトル`、tags: `["review"]`、links: `[PR URL]`
 - 前回実行時刻は SQLite `settings` テーブルに保存
-- UI: 手動実行ボタン（「🔍 組織PRスキャン」）+ 結果バナー通知（5秒で消滅）
+- UI: 手動実行ボタン（「🔍 組織PRスキャン」）+ 結果バナー通知
 - ストーリーのソート順を `priority ASC, created_at ASC` に変更（同一priority内で古いものが先 = FIFO）
-- 設定: `maidirector.yml` の `github.org` に組織名、`github.exclude_authors` に除外ユーザーリストを定義
+- 設定: `maidirector.yml` の `github.org`, `github.exclude_authors`, `github.bot_policy`
 
 #### Phase 2d: チャットからのタスク操作
 - Ollama の tool use（function calling）サポート状況を検証
@@ -89,7 +88,7 @@
 | Embedding | Ollama / nomic-embed-text | テキスト → 768次元ベクトル変換 |
 | DB | SQLite (modernc.org/sqlite) | タスク・ストーリー・会話・サマリーの CRUD (正規ストア) |
 | セマンティック検索 | Qdrant v1.17.0 (既存Docker) | 過去の文脈をベクトル検索で引き出す記憶層 |
-| GitHub 連携 | gh CLI (os/exec経由) | PR状態取得、イベント駆動 (Phase 2) |
+| GitHub 連携 | gh CLI (os/exec経由) | PR状態取得・組織PRスキャン |
 | Config | YAML (gopkg.in/yaml.v3) | 設定ファイル |
 
 ## Feature Design: レイヤー依存グラフ
@@ -125,7 +124,9 @@ layer_chains:
 ```
 stories テーブル
   - id, title, description, layer_chain, status (active/completed/archived)
-  - created_at, updated_at
+  - priority (0=なし, 1=P1最高 〜 5=P5最低), project, links (JSON), tags (JSON)
+  - last_active_at, created_at, updated_at
+  - ソート順: priority ASC, created_at ASC
 
 story_layers テーブル
   - id, story_id, layer_name, status (pending/in_progress/review/merged)
@@ -133,6 +134,9 @@ story_layers テーブル
   - sort_order (レイヤーチェーン内の順序、ブロック判定に使用)
   - created_at, updated_at
   - FOREIGN KEY (story_id) → stories(id) ON DELETE CASCADE
+
+settings テーブル
+  - key (PRIMARY KEY), value, updated_at
 ```
 
 ブロック判定は `sort_order` を使い表示時に計算。直前のレイヤーが merged でなければブロック中と判定する。
@@ -166,82 +170,31 @@ gh pr view <url> --json number,title,state,isDraft,mergeable,reviewDecision,url,
 
 ### 2026-04-02: Phase 1 MVP 実装
 - 要件定義・技術選定・アーキテクチャ設計・ロードマップ策定
-- Phase 1 MVP フルスタック実装完了:
-  - Go backend: config, store(SQLite), vectorstore(Qdrant), llm(Ollama), task, context, api, ws
-  - React frontend: TaskList, TaskForm, SuggestPanel, ChatPanel, WebSocket hook
-  - embed.FS で単一バイナリ化 (16MB)、Makefile 統合
-- Phase 1 残作業の実装:
-  - タスク作成/更新時のベクトル化（Qdrant upsert、SourceID でべき等更新）
-  - context_entry のベクトル化、UI 楽観的更新、favicon、タスク削除時の Qdrant クリーンアップ
-- 動作確認完了（Ollama qwen2.5:7b でタスクCRUD・提案・チャット・ベクトル化・削除すべて疎通）
+- Go backend + React frontend フルスタック実装、embed.FS で単一バイナリ化 (16MB)
+- 動作確認完了（qwen2.5:7b でタスクCRUD・提案・チャット・ベクトル化・削除すべて疎通）
 
 ### 2026-04-02: Phase 2a - ストーリー/レイヤー + パイプラインビュー
-- `stories` / `story_layers` テーブル、Story/StoryLayer CRUD、`StoryService` を実装
-- API: `GET/POST /api/stories`, `GET/PUT/DELETE /api/stories/{id}`, Layer CRUD, `GET /api/layer-chains`
-- フロントエンド: `StoryForm`, `StoryPipeline`（パイプラインビュー）, タスク/ストーリー切替タブ
-- Suggest/Chat プロンプトにストーリー情報を統合（`formatStories` でブロック判定含む）
+- stories/story_layers CRUD + パイプラインビュー + Suggest/Chat プロンプト統合
 - 動作確認完了（API + ブラウザ UI: パイプライン表示、ブロック判定、WebSocket リアルタイム更新）
-- バグ修正: `LayerChainConfig` の JSON タグ欠如
 
-### 2026-04-02: Phase 2b - GitHub 連携（gh コマンド）
-- `internal/github` パッケージ: `GetPRInfo`, `IsAvailable`, `ParsePRURL`
-- データモデル拡張: `PRTitle`, `PRReviewDecision` を StoryLayer に追加
-- API: `applyPRInfo`（PR URL 設定時に自動取得）, `refreshPRStates`（Suggest/Chat 前に一括更新）, `POST .../refresh-pr`（個別リフレッシュ）
-- フロントエンド: `PipelineStage` サブコンポーネント分離、PR URL 入力フォーム、PR 情報表示（番号リンク・タイトル・state バッジ・reviewDecision）、↻ ボタン
-- 動作確認完了（gh 認証確認、PR 情報取得・保存、ブラウザ UI 表示）
+### 2026-04-02: Phase 2b/2b' - GitHub 連携
+- `internal/github` パッケージ（`gh pr view` ラッパー）、PR URL → 情報自動取得・表示
+- isDraft / statusCheckRollup / CI ステータス表示、PR ラベル GitHub 準拠化、一括リフレッシュ
+- 動作確認完了（gh 認証、PR 情報取得・保存、ブラウザ UI 表示）
 
 ### 2026-04-02: 開発環境スクリプト + AGENTS.md
-- `dev.sh` 追加: 全依存サービス（Qdrant, Ollama, バックエンド, フロントエンド）のべき等一括起動
-- `AGENTS.md` 追加: ブラウザ UI テストの判断基準を明文化
-
-### 2026-04-02: Phase 2b' - GitHub 連携強化
-- `gh pr view` に `isDraft`, `statusCheckRollup` を追加、`summarizeChecks()` で CI ステータスを集約
-- データモデル拡張: `PRIsDraft`, `PRCheckStatus` を StoryLayer に追加、`scanStoryLayer()` ヘルパーで bool ↔ INTEGER 共通化
-- API: `POST /api/stories/refresh-prs`（全ストーリー一括更新）、マージ済みレイヤーのリフレッシュスキップ
-- フロントエンド: PR ラベル GitHub 準拠化（マージ済み:紫/オープン:緑/ドラフト:灰/未着手:灰）、CI 表示（✓/✗/⏳）、「↻ 全PR情報を更新」ボタン
-- LLM プロンプト: draft/ci 情報追加、CI FAILURE/PENDING の判断基準追加
-- コンパイル確認: Go build + TypeScript type check エラーなし
+- `dev.sh`（全依存サービスべき等一括起動）、`AGENTS.md`（動作確認の判断基準を明文化）
 
 ### 2026-04-02: Phase 2.5 - Task/Story データモデル統合
 - Task と Story を統合。単タスク = レイヤー0個の Story として表現
-- バックエンド:
-  - `model.go`: Task 型・ステータス定数を削除、Story に priority/project/links/tags/last_active_at を追加、ContextEntry の task_id → story_id 変更
-  - `store.go`: stories テーブルにカラム追加マイグレーション、tasks → stories 自動データ移行（起動時）、context_entries.task_id → story_id リネーム、tasks テーブル DROP、Story CRUD を新カラム対応に更新、scanStoryRow ヘルパー追加、CreateStory で links/tags nil → 空配列デフォルト
-  - `service.go`: TaskStore/Service を削除、StoryStore に CreateContextEntry/ListContextEntries を追加
-  - `server.go`: Task 系 API エンドポイント・ハンドラを全削除、Story 系に context エンドポイント追加（POST/GET /api/stories/{id}/context）、ベクトル化を story ベースに変更（source_type: "story"）、deleteStoryVectors でコンテキストベクトルも削除
-  - `vectorstore.go`: PointPayload の TaskID → StoryID 変更
-  - `context/manager.go`: ConversationStore から ListTasks 削除、filterActiveTasks/formatTasks/buildRecentActivityQuery を Story ベースに統合、buildSuggestPrompt/buildChatPrompt を Story のみに統一、formatStories に priority/project/tags 情報追加
-  - `main.go`: taskService を削除、NewServer シグネチャ更新
-  - `dev.sh`: ヘルスチェック URL を `/api/tasks` → `/api/stories` に修正
-- フロントエンド:
-  - `types.ts`: Task 型を削除、Story に priority/project/links/tags/last_active_at 追加、ContextEntry を story_id に変更
-  - `client.ts`: Task 系メソッドを全削除、addContext/listContext を stories/{id}/context に変更
-  - `App.tsx`: タスク/ストーリータブ切替を廃止、統合ビューに一本化（active/completed/archived フィルタ）
-  - `StoryPipeline.tsx`: 単タスク（レイヤー0個）表示対応、ステータス変更セレクト、コンテキスト入力統合、priority/project/tags 表示
-  - `StoryForm.tsx`: priority/project/tags 入力追加、レイヤーチェーン未選択=単タスク扱い
-  - `TaskList.tsx`, `TaskForm.tsx`: 削除
-  - `App.css`: nav-tabs スタイル削除、story-status-badge/story-footer/story-status-select 追加
-- 動作確認:
-  - コンパイル確認: Go build + TypeScript type check エラーなし
-  - API 確認: Story CRUD（作成・取得・更新・削除）、Context 追加・一覧、ステータスフィルタ → 全 OK。links が null 返却されるバグ発見 → CreateStory で nil → `[]` デフォルト設定して修正
-  - ブラウザ UI 確認: 統合ビュー（タブなし）、既存レイヤーストーリー表示（パイプライン・PR情報・CI状態）、単タスク作成・表示、ステータス変更（active→completed、完了セクション折りたたみ移動）、削除 → 全 OK
-- AGENTS.md: 作業完了の定義を明文化（検証ステップ → DEVELOPMENT.md 更新の順序を厳格化）
+- Task 系 API・コンポーネント全削除、Story に priority/project/links/tags 追加、UI 統合ビュー一本化
+- 動作確認完了（API: Story CRUD + Context + フィルタ、ブラウザ UI: 統合ビュー・単タスク・ステータス変更・削除）
+- バグ修正: links が null 返却 → CreateStory で nil → `[]` デフォルト
 
 ### 2026-04-02: Phase 2c - 組織内PRスキャン → レビュータスク自動生成
-- バックエンド:
-  - `config.go`: `GitHubConfig` 追加（`org`, `exclude_authors`）
-  - `github.go`: `SearchOrgPRs` メソッド追加（`gh search prs --owner <org> --state open --sort created --order asc --updated >YYYY-MM-DD`）、`IsBotAuthor` 追加
-  - `store.go`: `settings` テーブル追加（前回スキャン時刻保存）、`SetSetting`/`GetSetting`/`FindStoryByPRURL` メソッド追加。`FindStoryByPRURL` は `stories.links`（json_each）と `story_layers.pr_url` の両方を検索。ストーリーソート順を `priority ASC, created_at ASC` に変更（FIFO）
-  - `service.go`: `StoryStore` インターフェースに `SetSetting`/`GetSetting`/`FindStoryByPRURL` 追加
-  - `server.go`: `POST /api/stories/scan-org-prs` エンドポイント追加。org 未設定 → 400、gh 未認証 → 503、bot/除外ユーザーフィルタ、重複スキップ、差分スキャン（since = max(7日前, 前回スキャン時刻)）
-- フロントエンド:
-  - `types.ts`: `ScanOrgPRsResult` 型追加
-  - `client.ts`: `scanOrgPRs()` メソッド追加
-  - `App.tsx`: 「🔍 組織PRスキャン」ボタン追加、結果バナー表示（5秒後に自動消滅）
-  - `App.css`: `.btn-scan-org`, `.scan-result-banner` スタイル追加
-- 設定:
-  - `maidirector.yml` 追加（`github.org: <組織名>`）
-- 動作確認:
-  - コンパイル確認: Go build + TypeScript type check エラーなし
-  - API 確認: org 未設定時 400 エラー → config 設定後 54件スキャン・41件作成・13件スキップ（bot PR）→ 再スキャン時 54件スキャン・0件作成・54件スキップ（重複防止OK）→ 差分スキャン（last_scan_time 以降の更新なし → scanned: 0）
-  - ブラウザ UI 確認: スキャンボタン表示、レビュータスク一覧（古い順で正しくソート）、review タグ・github.com リンク表示 → 全 OK
+- `SearchOrgPRs`（`gh search prs --owner`）、`FindStoryByPRURL`（重複防止）、`settings` テーブル（差分スキャン）
+- `POST /api/stories/scan-org-prs` エンドポイント、UI に「🔍 組織PRスキャン」ボタン
+- ソート順を `priority ASC, created_at ASC` に変更（FIFO）
+- `bot_policy` 設定: exclude（デフォルト）または priority 数値で bot PR の扱いを切替
+- `maidirector.yml` に `github` セクション追加（`org`, `exclude_authors`, `bot_policy`）
+- 動作確認完了（54件スキャン → 41件作成・13件bot スキップ、再スキャン時の重複防止・差分スキャン、ブラウザ UI 表示）
