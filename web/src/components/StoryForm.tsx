@@ -69,6 +69,11 @@ export function StoryForm({ onCreated }: Props) {
         <button type="submit" disabled={!title.trim() || submitting}>
           {submitting ? '追加中...' : '追加'}
         </button>
+        {expanded && (
+          <button type="button" className="btn-collapse-form" onClick={() => setExpanded(false)} title="閉じる">
+            ✕
+          </button>
+        )}
       </div>
 
       {expanded && (

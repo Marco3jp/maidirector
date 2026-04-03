@@ -17,6 +17,8 @@ function App() {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
   const [refreshingAll, setRefreshingAll] = useState(false);
+  const [collapseSignal, setCollapseSignal] = useState(0);
+  const [expandSignal, setExpandSignal] = useState(0);
   const suppressWsRefreshRef = useRef(false);
   const snoozeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -136,7 +138,6 @@ function App() {
       <main className="app-main">
         <section className="panel panel-tasks">
           <div className="panel-header">
-            <h2>ストーリー</h2>
             <div className="panel-header-actions">
               <div className="filter-bar">
                 {(['' , 'active', 'completed', 'archived'] as FilterStatus[]).map((s) => (
@@ -148,6 +149,21 @@ function App() {
                     {s === '' ? 'すべて' : s === 'active' ? 'アクティブ' : s === 'completed' ? '完了' : 'アーカイブ'}
                   </button>
                 ))}
+                <span className="filter-bar-divider" />
+                <button
+                  className="filter-btn filter-btn-icon"
+                  onClick={() => setCollapseSignal((n) => n + 1)}
+                  title="すべて畳む"
+                >
+                  一括▲
+                </button>
+                <button
+                  className="filter-btn filter-btn-icon"
+                  onClick={() => setExpandSignal((n) => n + 1)}
+                  title="すべて展開"
+                >
+                  一括▼
+                </button>
               </div>
             </div>
           </div>
@@ -160,7 +176,7 @@ function App() {
 
           <StoryForm onCreated={handleStoryCreated} />
 
-          <StoryPipeline stories={filterStatus === '' ? activeStories : stories} onRefresh={loadStories} />
+          <StoryPipeline stories={filterStatus === '' ? activeStories : stories} onRefresh={loadStories} collapseSignal={collapseSignal} expandSignal={expandSignal} />
 
           {filterStatus === '' && completedStories.length > 0 && (
             <details className="done-section">

@@ -102,18 +102,48 @@ function getPRStatusLabel(t: StoryTask): { label: string; color: string; classNa
 interface Props {
   stories: Story[];
   onRefresh: () => void;
+  collapseSignal?: number;
+  expandSignal?: number;
 }
 
-export function StoryPipeline({ stories, onRefresh }: Props) {
+export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal }: Props) {
   const [chains, setChains] = useState<LayerChain[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [contextId, setContextId] = useState<string | null>(null);
   const [snoozeMenuId, setSnoozeMenuId] = useState<string | null>(null);
-  const [hiddenRepos, setHiddenRepos] = useState<Set<string>>(new Set());
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const [hiddenRepos, setHiddenRepos] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('maidirector:hiddenRepos');
+      return saved ? new Set<string>(JSON.parse(saved)) : new Set<string>();
+    } catch {
+      return new Set<string>();
+    }
+  });
+
+  const updateHiddenRepos = (next: Set<string>) => {
+    setHiddenRepos(next);
+    try {
+      localStorage.setItem('maidirector:hiddenRepos', JSON.stringify([...next]));
+    } catch { /* ignore */ }
+  };
 
   useEffect(() => {
     api.getLayerChains().then(setChains).catch(console.error);
   }, []);
+
+  useEffect(() => {
+    if (collapseSignal === undefined) return;
+    setCollapsedIds(new Set(stories.map((s) => s.id)));
+  // collapseSignal の変化だけを監視する意図的な依存リスト
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collapseSignal]);
+
+  useEffect(() => {
+    if (expandSignal === undefined) return;
+    setCollapsedIds(new Set());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandSignal]);
 
   const handleDelete = async (id: string) => {
     if (!confirm('このストーリーを削除しますか？')) return;
@@ -259,6 +289,7 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
       } else {
         next.add(repo);
       }
+      updateHiddenRepos(next);
       return next;
     });
   };
@@ -279,14 +310,6 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
       <div className="story-list-toolbar">
         {repoNames.length > 0 && (
           <div className="repo-filter-chips">
-            {hiddenRepos.size > 0 && (
-              <button
-                className="repo-filter-clear"
-                onClick={() => setHiddenRepos(new Set())}
-              >
-                すべて表示
-              </button>
-            )}
             {repoNames.map((repo) => {
               const hidden = hiddenRepos.has(repo);
               return (
@@ -300,6 +323,18 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
                 </button>
               );
             })}
+            <button
+              className="repo-filter-clear"
+              onClick={() => updateHiddenRepos(new Set(repoNames))}
+            >
+              すべて非表示
+            </button>
+            <button
+              className="repo-filter-clear"
+              onClick={() => updateHiddenRepos(new Set())}
+            >
+              すべて表示
+            </button>
           </div>
         )}
       </div>
@@ -310,6 +345,41 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
         const isSingleTask = story.tasks.length === 0;
         const isSnoozed = story.snoozed_until ? new Date(story.snoozed_until) > new Date() : false;
         const snoozeLabel = formatSnoozedUntil(story.snoozed_until);
+        const isCollapsed = collapsedIds.has(story.id);
+
+        if (isCollapsed) {
+          return (
+            <div key={story.id} className={`story-card story-card-collapsed ${isSnoozed ? 'story-snoozed' : ''}`}>
+              <div className="story-collapsed-row">
+                <span
+                  className="story-status-badge"
+                  style={{ backgroundColor: STORY_STATUS_COLORS[story.status] }}
+                >
+                  {STORY_STATUS_LABELS[story.status]}
+                </span>
+                <span className="story-title story-collapsed-title">{story.title}</span>
+                {story.tasks.map((t) => (
+                  <span key={t.id} className="story-collapsed-task">
+                    {t.pr_url ? (
+                      <a href={t.pr_url} target="_blank" rel="noopener noreferrer" className="story-collapsed-task-link">
+                        {t.name}
+                      </a>
+                    ) : (
+                      t.name
+                    )}
+                  </span>
+                ))}
+                <button
+                  className="btn-icon story-collapsed-expand"
+                  onClick={() => setCollapsedIds((prev) => { const next = new Set(prev); next.delete(story.id); return next; })}
+                  title="展開"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
+          );
+        }
 
         return (
           <div key={story.id} className={`story-card ${isSingleTask ? 'story-single-task' : ''} ${isSnoozed ? 'story-snoozed' : ''}`}>
@@ -377,6 +447,13 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
                   title="タスク管理"
                 >
                   ⚙
+                </button>
+                <button
+                  className="btn-icon"
+                  onClick={() => setCollapsedIds((prev) => { const next = new Set(prev); next.add(story.id); return next; })}
+                  title="畳む"
+                >
+                  ▲
                 </button>
                 <button
                   className="btn-icon btn-danger"
