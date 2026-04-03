@@ -49,10 +49,12 @@ func NewServer(cfg *config.Config, storySvc *task.StoryService, ctxMgr *context.
 	mux.HandleFunc("GET /api/stories/{id}", s.handleGetStory)
 	mux.HandleFunc("PUT /api/stories/{id}", s.handleUpdateStory)
 	mux.HandleFunc("DELETE /api/stories/{id}", s.handleDeleteStory)
-	mux.HandleFunc("POST /api/stories/{id}/layers", s.handleAddLayer)
-	mux.HandleFunc("PUT /api/stories/{storyId}/layers/{layerId}", s.handleUpdateLayer)
-	mux.HandleFunc("DELETE /api/stories/{storyId}/layers/{layerId}", s.handleDeleteLayer)
-	mux.HandleFunc("POST /api/stories/{storyId}/layers/{layerId}/refresh-pr", s.handleRefreshLayerPR)
+	mux.HandleFunc("POST /api/stories/{id}/tasks", s.handleAddTask)
+	mux.HandleFunc("PUT /api/stories/{storyId}/tasks/{taskId}", s.handleUpdateTask)
+	mux.HandleFunc("DELETE /api/stories/{storyId}/tasks/{taskId}", s.handleDeleteTask)
+	mux.HandleFunc("POST /api/stories/{storyId}/tasks/{taskId}/refresh-pr", s.handleRefreshTaskPR)
+	mux.HandleFunc("POST /api/stories/{storyId}/tasks/{taskId}/deps", s.handleAddTaskDep)
+	mux.HandleFunc("DELETE /api/stories/{storyId}/tasks/{taskId}/deps/{depId}", s.handleRemoveTaskDep)
 	mux.HandleFunc("POST /api/stories/refresh-prs", s.handleRefreshAllPRs)
 	mux.HandleFunc("POST /api/stories/scan-org-prs", s.handleScanOrgPRs)
 	mux.HandleFunc("POST /api/stories/{id}/snooze", s.handleSnoozeStory)
@@ -115,12 +117,61 @@ func (s *Server) handleCreateStory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	st.Layers = []*task.StoryLayer{}
+
+	// レイヤーチェーンテンプレートが指定された場合、タスクを自動生成する
+	if st.LayerChain != "" {
+		createdTasks, err := s.createTemplateTasksForStory(st.ID, st.LayerChain)
+		if err != nil {
+			log.Printf("warning: failed to auto-create tasks for story %s: %v", st.ID, err)
+			st.Tasks = []*task.StoryTask{}
+		} else {
+			st.Tasks = createdTasks
+		}
+	} else {
+		st.Tasks = []*task.StoryTask{}
+	}
 
 	go s.vectorizeStory(&st)
 
 	s.wsHub.Broadcast(ws.Message{Type: "story_created", Payload: st})
 	writeJSON(w, http.StatusCreated, st)
+}
+
+// createTemplateTasksForStory はチェーンテンプレートに基づいてタスクを自動生成する。
+// 生成したタスクは sort_order の順で隣接依存（chain）として task_dependencies に登録する。
+func (s *Server) createTemplateTasksForStory(storyID, chainName string) ([]*task.StoryTask, error) {
+	var chainLayers []string
+	for _, c := range s.cfg.LayerChains {
+		if c.Name == chainName {
+			chainLayers = c.Layers
+			break
+		}
+	}
+	if len(chainLayers) == 0 {
+		return []*task.StoryTask{}, nil
+	}
+
+	var createdTasks []*task.StoryTask
+	for i, name := range chainLayers {
+		t := &task.StoryTask{
+			StoryID:   storyID,
+			Name:      name,
+			Status:    task.TaskStatusPending,
+			SortOrder: i,
+			DependsOn: []string{},
+		}
+		if err := s.storySvc.AddTask(t); err != nil {
+			return nil, err
+		}
+		if i > 0 {
+			if err := s.storySvc.AddTaskDep(t.ID, createdTasks[i-1].ID); err != nil {
+				return nil, err
+			}
+			t.DependsOn = []string{createdTasks[i-1].ID}
+		}
+		createdTasks = append(createdTasks, t)
+	}
+	return createdTasks, nil
 }
 
 func (s *Server) handleGetStory(w http.ResponseWriter, r *http.Request) {
@@ -180,42 +231,42 @@ func (s *Server) handleDeleteStory(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handleAddLayer(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAddTask(w http.ResponseWriter, r *http.Request) {
 	storyID := r.PathValue("id")
 	if _, err := s.storySvc.Get(storyID); err != nil {
 		writeError(w, http.StatusNotFound, "story not found")
 		return
 	}
 
-	var layer task.StoryLayer
-	if err := json.NewDecoder(r.Body).Decode(&layer); err != nil {
+	var t task.StoryTask
+	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if layer.LayerName == "" {
-		writeError(w, http.StatusBadRequest, "layer_name is required")
+	if t.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
 
-	layer.StoryID = storyID
-	if err := s.storySvc.AddLayer(&layer); err != nil {
+	t.StoryID = storyID
+	if err := s.storySvc.AddTask(&t); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: map[string]string{"story_id": storyID}})
-	writeJSON(w, http.StatusCreated, layer)
+	writeJSON(w, http.StatusCreated, t)
 }
 
-func (s *Server) handleUpdateLayer(w http.ResponseWriter, r *http.Request) {
-	layerID := r.PathValue("layerId")
-	existing, err := s.storySvc.GetLayer(layerID)
+func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskId")
+	existing, err := s.storySvc.GetTask(taskID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "layer not found")
+		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
 
-	var updates task.StoryLayer
+	var updates task.StoryTask
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -223,7 +274,7 @@ func (s *Server) handleUpdateLayer(w http.ResponseWriter, r *http.Request) {
 
 	oldPRUrl := existing.PRUrl
 
-	existing.LayerName = updates.LayerName
+	existing.Name = updates.Name
 	existing.Status = updates.Status
 	existing.PRUrl = updates.PRUrl
 	existing.PRNumber = updates.PRNumber
@@ -238,7 +289,7 @@ func (s *Server) handleUpdateLayer(w http.ResponseWriter, r *http.Request) {
 		s.applyPRInfo(existing)
 	}
 
-	if err := s.storySvc.UpdateLayer(existing); err != nil {
+	if err := s.storySvc.UpdateTask(existing); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -247,11 +298,11 @@ func (s *Server) handleUpdateLayer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, existing)
 }
 
-func (s *Server) handleDeleteLayer(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 	storyID := r.PathValue("storyId")
-	layerID := r.PathValue("layerId")
+	taskID := r.PathValue("taskId")
 
-	if err := s.storySvc.DeleteLayer(layerID); err != nil {
+	if err := s.storySvc.DeleteTask(taskID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -266,6 +317,47 @@ func (s *Server) handleGetLayerChains(w http.ResponseWriter, _ *http.Request) {
 		chains = []config.LayerChainConfig{}
 	}
 	writeJSON(w, http.StatusOK, chains)
+}
+
+// --- Task Dep handlers ---
+
+func (s *Server) handleAddTaskDep(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskId")
+	if _, err := s.storySvc.GetTask(taskID); err != nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	var req struct {
+		DependsOnID string `json:"depends_on_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.DependsOnID == "" {
+		writeError(w, http.StatusBadRequest, "depends_on_id is required")
+		return
+	}
+
+	if err := s.storySvc.AddTaskDep(taskID, req.DependsOnID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	storyID := r.PathValue("storyId")
+	s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: map[string]string{"story_id": storyID}})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRemoveTaskDep(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskId")
+	depID := r.PathValue("depId")
+
+	if err := s.storySvc.RemoveTaskDep(taskID, depID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	storyID := r.PathValue("storyId")
+	s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: map[string]string{"story_id": storyID}})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- Context handlers ---
@@ -309,16 +401,16 @@ func (s *Server) handleListContext(w http.ResponseWriter, r *http.Request) {
 
 // --- PR refresh ---
 
-func (s *Server) handleRefreshLayerPR(w http.ResponseWriter, r *http.Request) {
-	layerID := r.PathValue("layerId")
-	existing, err := s.storySvc.GetLayer(layerID)
+func (s *Server) handleRefreshTaskPR(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskId")
+	existing, err := s.storySvc.GetTask(taskID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "layer not found")
+		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
 
 	if existing.PRUrl == "" {
-		writeError(w, http.StatusBadRequest, "layer has no PR URL")
+		writeError(w, http.StatusBadRequest, "task has no PR URL")
 		return
 	}
 
@@ -329,7 +421,7 @@ func (s *Server) handleRefreshLayerPR(w http.ResponseWriter, r *http.Request) {
 
 	s.applyPRInfo(existing)
 
-	if err := s.storySvc.UpdateLayer(existing); err != nil {
+	if err := s.storySvc.UpdateTask(existing); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -338,23 +430,23 @@ func (s *Server) handleRefreshLayerPR(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, existing)
 }
 
-func (s *Server) applyPRInfo(layer *task.StoryLayer) {
-	if s.ghClient == nil || layer.PRUrl == "" {
+func (s *Server) applyPRInfo(t *task.StoryTask) {
+	if s.ghClient == nil || t.PRUrl == "" {
 		return
 	}
-	info, err := s.ghClient.GetPRInfo(layer.PRUrl)
+	info, err := s.ghClient.GetPRInfo(t.PRUrl)
 	if err != nil {
-		log.Printf("warning: failed to fetch PR info for %s: %v", layer.PRUrl, err)
+		log.Printf("warning: failed to fetch PR info for %s: %v", t.PRUrl, err)
 		return
 	}
-	layer.PRNumber = info.Number
-	layer.PRState = info.State
-	layer.PRTitle = info.Title
-	layer.PRReviewDecision = info.ReviewDecision
-	layer.PRIsDraft = info.IsDraft
-	layer.PRCheckStatus = info.CheckStatus
-	if info.State == "MERGED" && layer.Status != task.LayerStatusMerged {
-		layer.Status = task.LayerStatusMerged
+	t.PRNumber = info.Number
+	t.PRState = info.State
+	t.PRTitle = info.Title
+	t.PRReviewDecision = info.ReviewDecision
+	t.PRIsDraft = info.IsDraft
+	t.PRCheckStatus = info.CheckStatus
+	if info.State == "MERGED" && t.Status != task.TaskStatusMerged {
+		t.Status = task.TaskStatusMerged
 	}
 }
 
@@ -368,13 +460,13 @@ func (s *Server) refreshPRStates() {
 		return
 	}
 	for _, story := range stories {
-		for _, layer := range story.Layers {
-			if layer.PRUrl == "" || layer.Status == task.LayerStatusMerged {
+		for _, t := range story.Tasks {
+			if t.PRUrl == "" || t.Status == task.TaskStatusMerged {
 				continue
 			}
-			s.applyPRInfo(layer)
-			if err := s.storySvc.UpdateLayer(layer); err != nil {
-				log.Printf("warning: failed to update layer after PR refresh: %v", err)
+			s.applyPRInfo(t)
+			if err := s.storySvc.UpdateTask(t); err != nil {
+				log.Printf("warning: failed to update task after PR refresh: %v", err)
 			}
 		}
 	}
@@ -470,10 +562,11 @@ func (s *Server) handleScanOrgPRs(w http.ResponseWriter, r *http.Request) {
 
 		title := fmt.Sprintf("[Review] %s #%d: %s", pr.Repo, pr.Number, pr.Title)
 		st := &task.Story{
-			Title:  title,
-			Status: task.StoryStatusActive,
-			Links:  []string{pr.URL},
-			Tags:   []string{"review"},
+			Title:    title,
+			Status:   task.StoryStatusActive,
+			Priority: 4,
+			Links:    []string{pr.URL},
+			Tags:     []string{"review"},
 		}
 		if isBot {
 			st.Priority = botPriority
@@ -483,7 +576,7 @@ func (s *Server) handleScanOrgPRs(w http.ResponseWriter, r *http.Request) {
 			log.Printf("warning: failed to create review story for PR %s: %v", pr.URL, err)
 			continue
 		}
-		st.Layers = []*task.StoryLayer{}
+		st.Tasks = []*task.StoryTask{}
 
 		go s.vectorizeStory(st)
 		s.wsHub.Broadcast(ws.Message{Type: "story_created", Payload: st})

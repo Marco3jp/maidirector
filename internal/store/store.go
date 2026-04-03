@@ -130,6 +130,33 @@ func (s *Store) migrate() error {
 		)`,
 		// Phase 2c': スヌーズカラム
 		`ALTER TABLE stories ADD COLUMN snoozed_until DATETIME`,
+		// Phase 3: story_tasks テーブル（story_layers をリネーム、name カラムに変更）
+		`CREATE TABLE IF NOT EXISTS story_tasks (
+			id TEXT PRIMARY KEY,
+			story_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			status TEXT DEFAULT 'pending',
+			pr_url TEXT DEFAULT '',
+			pr_number INTEGER DEFAULT 0,
+			pr_state TEXT DEFAULT '',
+			pr_title TEXT DEFAULT '',
+			pr_review_decision TEXT DEFAULT '',
+			pr_is_draft INTEGER DEFAULT 0,
+			pr_check_status TEXT DEFAULT '',
+			sort_order INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_story_tasks_story_id ON story_tasks(story_id)`,
+		// Phase 3: task_dependencies テーブル（任意依存関係の DAG）
+		`CREATE TABLE IF NOT EXISTS task_dependencies (
+			task_id TEXT NOT NULL,
+			depends_on_id TEXT NOT NULL,
+			PRIMARY KEY (task_id, depends_on_id),
+			FOREIGN KEY (task_id) REFERENCES story_tasks(id) ON DELETE CASCADE,
+			FOREIGN KEY (depends_on_id) REFERENCES story_tasks(id) ON DELETE CASCADE
+		)`,
 	}
 
 	for _, m := range migrations {
@@ -144,6 +171,12 @@ func (s *Store) migrate() error {
 	if err := s.migrateTasksToStories(); err != nil {
 		return fmt.Errorf("task migration failed: %w", err)
 	}
+
+	if err := s.migrateStoryLayersToTasks(); err != nil {
+		return fmt.Errorf("story_layers migration failed: %w", err)
+	}
+
+	s.migrateSnoozedUntilToUTC()
 
 	return nil
 }
@@ -210,6 +243,136 @@ func (s *Store) migrateTasksToStories() error {
 	s.db.Exec(`DROP TABLE IF EXISTS tasks`)
 
 	return nil
+}
+
+// migrateStoryLayersToTasks は story_layers のデータを story_tasks にコピーし、
+// sort_order の順で隣接タスク間の依存関係を task_dependencies に登録する。
+// story_tasks に既にデータがある場合はスキップする（冪等）。
+func (s *Store) migrateStoryLayersToTasks() error {
+	var layerCount int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM story_layers`).Scan(&layerCount)
+	if err != nil || layerCount == 0 {
+		return nil
+	}
+
+	var taskCount int
+	s.db.QueryRow(`SELECT COUNT(*) FROM story_tasks`).Scan(&taskCount)
+	if taskCount > 0 {
+		return nil
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, story_id, layer_name, status, pr_url, pr_number, pr_state,
+		       pr_title, pr_review_decision, pr_is_draft, pr_check_status,
+		       sort_order, created_at, updated_at
+		FROM story_layers
+		ORDER BY story_id, sort_order ASC
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type layerRow struct {
+		id               string
+		storyID          string
+		name             string
+		status           string
+		prURL            string
+		prNumber         int
+		prState          string
+		prTitle          string
+		prReviewDecision string
+		prIsDraft        int
+		prCheckStatus    string
+		sortOrder        int
+		createdAt        time.Time
+		updatedAt        time.Time
+	}
+
+	var layers []layerRow
+	for rows.Next() {
+		var l layerRow
+		if err := rows.Scan(
+			&l.id, &l.storyID, &l.name, &l.status, &l.prURL, &l.prNumber,
+			&l.prState, &l.prTitle, &l.prReviewDecision, &l.prIsDraft,
+			&l.prCheckStatus, &l.sortOrder, &l.createdAt, &l.updatedAt,
+		); err != nil {
+			return err
+		}
+		layers = append(layers, l)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// story_id → sorted task IDs の対応を保持して deps を作る
+	storyTasks := map[string][]string{}
+
+	for _, l := range layers {
+		_, err := tx.Exec(`
+			INSERT OR IGNORE INTO story_tasks
+			  (id, story_id, name, status, pr_url, pr_number, pr_state,
+			   pr_title, pr_review_decision, pr_is_draft, pr_check_status,
+			   sort_order, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			l.id, l.storyID, l.name, l.status, l.prURL, l.prNumber, l.prState,
+			l.prTitle, l.prReviewDecision, l.prIsDraft, l.prCheckStatus,
+			l.sortOrder, l.createdAt, l.updatedAt,
+		)
+		if err != nil {
+			return err
+		}
+		storyTasks[l.storyID] = append(storyTasks[l.storyID], l.id)
+	}
+
+	// 隣接タスク間に依存関係を作成（既存のチェーン動作を再現）
+	for _, ids := range storyTasks {
+		for i := 1; i < len(ids); i++ {
+			if _, err := tx.Exec(`
+				INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id)
+				VALUES (?, ?)`, ids[i], ids[i-1],
+			); err != nil {
+				return err
+			}
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *Store) migrateSnoozedUntilToUTC() {
+	rows, err := s.db.Query(`SELECT id, snoozed_until FROM stories WHERE snoozed_until IS NOT NULL`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	type record struct {
+		id    string
+		until time.Time
+	}
+	var records []record
+	for rows.Next() {
+		var id string
+		var until time.Time
+		if err := rows.Scan(&id, &until); err != nil {
+			continue
+		}
+		records = append(records, record{id, until})
+	}
+	rows.Close()
+
+	for _, r := range records {
+		utcStr := r.until.UTC().Format("2006-01-02 15:04:05")
+		s.db.Exec(`UPDATE stories SET snoozed_until = ? WHERE id = ?`, utcStr, r.id)
+	}
 }
 
 func (s *Store) migrateContextEntryColumn() {
@@ -377,11 +540,11 @@ func (s *Store) GetStory(id string) (*task.Story, error) {
 		return nil, err
 	}
 
-	layers, err := s.ListStoryLayers(st.ID)
+	tasks, err := s.ListStoryTasks(st.ID)
 	if err != nil {
 		return nil, err
 	}
-	st.Layers = layers
+	st.Tasks = tasks
 	return st, nil
 }
 
@@ -393,7 +556,7 @@ func (s *Store) ListStories(status string) ([]*task.Story, error) {
 		query += ` AND status = ?`
 		args = append(args, status)
 	}
-	query += ` ORDER BY CASE WHEN snoozed_until > CURRENT_TIMESTAMP THEN 1 ELSE 0 END ASC, priority ASC, created_at ASC`
+	query += ` ORDER BY CASE WHEN snoozed_until IS NOT NULL AND datetime(snoozed_until) > datetime('now') THEN 1 ELSE 0 END ASC, CASE WHEN priority = 0 THEN 999 ELSE priority END ASC, created_at ASC`
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -407,11 +570,11 @@ func (s *Store) ListStories(status string) ([]*task.Story, error) {
 		if err != nil {
 			return nil, err
 		}
-		layers, err := s.ListStoryLayers(st.ID)
+		tasks, err := s.ListStoryTasks(st.ID)
 		if err != nil {
 			return nil, err
 		}
-		st.Layers = layers
+		st.Tasks = tasks
 		stories = append(stories, st)
 	}
 	return stories, rows.Err()
@@ -437,82 +600,122 @@ func (s *Store) DeleteStory(id string) error {
 	return err
 }
 
-// --- Story Layers ---
+// --- Story Tasks ---
 
-func (s *Store) CreateStoryLayer(l *task.StoryLayer) error {
-	l.ID = uuid.New().String()
+func (s *Store) CreateStoryTask(t *task.StoryTask) error {
+	t.ID = uuid.New().String()
 	now := time.Now()
-	l.CreatedAt = now
-	l.UpdatedAt = now
+	t.CreatedAt = now
+	t.UpdatedAt = now
 
-	if l.Status == "" {
-		l.Status = task.LayerStatusPending
+	if t.Status == "" {
+		t.Status = task.TaskStatusPending
+	}
+	if t.DependsOn == nil {
+		t.DependsOn = []string{}
 	}
 
-	if l.SortOrder == 0 {
+	if t.SortOrder == 0 {
 		var maxOrder int
-		s.db.QueryRow(`SELECT COALESCE(MAX(sort_order), -1) FROM story_layers WHERE story_id = ?`, l.StoryID).Scan(&maxOrder)
-		l.SortOrder = maxOrder + 1
+		s.db.QueryRow(`SELECT COALESCE(MAX(sort_order), -1) FROM story_tasks WHERE story_id = ?`, t.StoryID).Scan(&maxOrder)
+		t.SortOrder = maxOrder + 1
 	}
 
 	_, err := s.db.Exec(
-		`INSERT INTO story_layers (id, story_id, layer_name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, sort_order, created_at, updated_at)
+		`INSERT INTO story_tasks (id, story_id, name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, sort_order, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		l.ID, l.StoryID, l.LayerName, l.Status, l.PRUrl, l.PRNumber, l.PRState, l.PRTitle, l.PRReviewDecision, boolToInt(l.PRIsDraft), l.PRCheckStatus, l.SortOrder, l.CreatedAt, l.UpdatedAt,
+		t.ID, t.StoryID, t.Name, t.Status, t.PRUrl, t.PRNumber, t.PRState, t.PRTitle, t.PRReviewDecision, boolToInt(t.PRIsDraft), t.PRCheckStatus, t.SortOrder, t.CreatedAt, t.UpdatedAt,
 	)
 	if err != nil {
 		return err
 	}
 
-	_, err = s.db.Exec(`UPDATE stories SET updated_at = ? WHERE id = ?`, now, l.StoryID)
+	_, err = s.db.Exec(`UPDATE stories SET updated_at = ? WHERE id = ?`, now, t.StoryID)
 	return err
 }
 
-func (s *Store) ListStoryLayers(storyID string) ([]*task.StoryLayer, error) {
+func (s *Store) GetStoryTask(id string) (*task.StoryTask, error) {
+	row := s.db.QueryRow(
+		`SELECT id, story_id, name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, sort_order, created_at, updated_at
+		 FROM story_tasks WHERE id = ?`, id,
+	)
+	t, err := scanStoryTask(row)
+	if err != nil {
+		return nil, err
+	}
+	deps, err := s.loadTaskDeps([]string{t.ID})
+	if err != nil {
+		return nil, err
+	}
+	if d, ok := deps[t.ID]; ok {
+		t.DependsOn = d
+	} else {
+		t.DependsOn = []string{}
+	}
+	return t, nil
+}
+
+func (s *Store) ListStoryTasks(storyID string) ([]*task.StoryTask, error) {
 	rows, err := s.db.Query(
-		`SELECT id, story_id, layer_name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, sort_order, created_at, updated_at
-		 FROM story_layers WHERE story_id = ? ORDER BY sort_order ASC`, storyID,
+		`SELECT id, story_id, name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, sort_order, created_at, updated_at
+		 FROM story_tasks WHERE story_id = ? ORDER BY sort_order ASC`, storyID,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var layers []*task.StoryLayer
+	var tasks []*task.StoryTask
+	var ids []string
 	for rows.Next() {
-		l, err := scanStoryLayer(rows)
+		t, err := scanStoryTask(rows)
 		if err != nil {
 			return nil, err
 		}
-		layers = append(layers, l)
+		t.DependsOn = []string{}
+		tasks = append(tasks, t)
+		ids = append(ids, t.ID)
 	}
-	if layers == nil {
-		layers = []*task.StoryLayer{}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-	return layers, rows.Err()
+	if tasks == nil {
+		return []*task.StoryTask{}, nil
+	}
+
+	deps, err := s.loadTaskDeps(ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range tasks {
+		if d, ok := deps[t.ID]; ok {
+			t.DependsOn = d
+		}
+	}
+	return tasks, nil
 }
 
-func (s *Store) UpdateStoryLayer(l *task.StoryLayer) error {
-	l.UpdatedAt = time.Now()
+func (s *Store) UpdateStoryTask(t *task.StoryTask) error {
+	t.UpdatedAt = time.Now()
 	_, err := s.db.Exec(
-		`UPDATE story_layers SET layer_name=?, status=?, pr_url=?, pr_number=?, pr_state=?, pr_title=?, pr_review_decision=?, pr_is_draft=?, pr_check_status=?, sort_order=?, updated_at=? WHERE id=?`,
-		l.LayerName, l.Status, l.PRUrl, l.PRNumber, l.PRState, l.PRTitle, l.PRReviewDecision, boolToInt(l.PRIsDraft), l.PRCheckStatus, l.SortOrder, l.UpdatedAt, l.ID,
+		`UPDATE story_tasks SET name=?, status=?, pr_url=?, pr_number=?, pr_state=?, pr_title=?, pr_review_decision=?, pr_is_draft=?, pr_check_status=?, sort_order=?, updated_at=? WHERE id=?`,
+		t.Name, t.Status, t.PRUrl, t.PRNumber, t.PRState, t.PRTitle, t.PRReviewDecision, boolToInt(t.PRIsDraft), t.PRCheckStatus, t.SortOrder, t.UpdatedAt, t.ID,
 	)
 	if err != nil {
 		return err
 	}
 
-	_, err = s.db.Exec(`UPDATE stories SET updated_at = ? WHERE id = ?`, l.UpdatedAt, l.StoryID)
+	_, err = s.db.Exec(`UPDATE stories SET updated_at = ? WHERE id = ?`, t.UpdatedAt, t.StoryID)
 	return err
 }
 
-func (s *Store) DeleteStoryLayer(id string) error {
+func (s *Store) DeleteStoryTask(id string) error {
 	var storyID string
-	if err := s.db.QueryRow(`SELECT story_id FROM story_layers WHERE id = ?`, id).Scan(&storyID); err != nil {
+	if err := s.db.QueryRow(`SELECT story_id FROM story_tasks WHERE id = ?`, id).Scan(&storyID); err != nil {
 		return err
 	}
 
-	_, err := s.db.Exec(`DELETE FROM story_layers WHERE id = ?`, id)
+	_, err := s.db.Exec(`DELETE FROM story_tasks WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
@@ -521,16 +724,59 @@ func (s *Store) DeleteStoryLayer(id string) error {
 	return err
 }
 
-func (s *Store) GetStoryLayer(id string) (*task.StoryLayer, error) {
-	row := s.db.QueryRow(
-		`SELECT id, story_id, layer_name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, sort_order, created_at, updated_at
-		 FROM story_layers WHERE id = ?`, id,
+func (s *Store) AddTaskDep(taskID, dependsOnID string) error {
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id) VALUES (?, ?)`,
+		taskID, dependsOnID,
 	)
-	return scanStoryLayer(row)
+	return err
+}
+
+func (s *Store) RemoveTaskDep(taskID, dependsOnID string) error {
+	_, err := s.db.Exec(
+		`DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_id = ?`,
+		taskID, dependsOnID,
+	)
+	return err
+}
+
+// loadTaskDeps はタスク ID のリストに対して task_dependencies をバッチ取得し、
+// taskID → []dependsOnID のマップを返す。
+func (s *Store) loadTaskDeps(taskIDs []string) (map[string][]string, error) {
+	if len(taskIDs) == 0 {
+		return map[string][]string{}, nil
+	}
+
+	placeholders := strings.Repeat("?,", len(taskIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(taskIDs))
+	for i, id := range taskIDs {
+		args[i] = id
+	}
+
+	rows, err := s.db.Query(
+		fmt.Sprintf(`SELECT task_id, depends_on_id FROM task_dependencies WHERE task_id IN (%s)`, placeholders),
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := map[string][]string{}
+	for rows.Next() {
+		var taskID, depID string
+		if err := rows.Scan(&taskID, &depID); err != nil {
+			return nil, err
+		}
+		result[taskID] = append(result[taskID], depID)
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) SnoozeStory(id string, until time.Time) error {
-	_, err := s.db.Exec(`UPDATE stories SET snoozed_until = ?, updated_at = ? WHERE id = ?`, until, time.Now(), id)
+	_, err := s.db.Exec(`UPDATE stories SET snoozed_until = ?, updated_at = ? WHERE id = ?`,
+		until.UTC().Format("2006-01-02 15:04:05"), time.Now(), id)
 	return err
 }
 
@@ -575,7 +821,7 @@ func (s *Store) FindStoryByPRURL(prURL string) (string, error) {
 	}
 
 	err = s.db.QueryRow(
-		`SELECT story_id FROM story_layers WHERE pr_url = ? LIMIT 1`,
+		`SELECT story_id FROM story_tasks WHERE pr_url = ? LIMIT 1`,
 		prURL,
 	).Scan(&id)
 	if err == sql.ErrNoRows {
@@ -586,14 +832,14 @@ func (s *Store) FindStoryByPRURL(prURL string) (string, error) {
 
 // --- scan helpers ---
 
-func scanStoryLayer(sc scannable) (*task.StoryLayer, error) {
-	l := &task.StoryLayer{}
+func scanStoryTask(sc scannable) (*task.StoryTask, error) {
+	t := &task.StoryTask{}
 	var isDraft int
-	if err := sc.Scan(&l.ID, &l.StoryID, &l.LayerName, &l.Status, &l.PRUrl, &l.PRNumber, &l.PRState, &l.PRTitle, &l.PRReviewDecision, &isDraft, &l.PRCheckStatus, &l.SortOrder, &l.CreatedAt, &l.UpdatedAt); err != nil {
+	if err := sc.Scan(&t.ID, &t.StoryID, &t.Name, &t.Status, &t.PRUrl, &t.PRNumber, &t.PRState, &t.PRTitle, &t.PRReviewDecision, &isDraft, &t.PRCheckStatus, &t.SortOrder, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
-	l.PRIsDraft = isDraft != 0
-	return l, nil
+	t.PRIsDraft = isDraft != 0
+	return t, nil
 }
 
 func boolToInt(b bool) int {

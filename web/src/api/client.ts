@@ -1,4 +1,4 @@
-import type { ContextEntry, Story, CreateStoryRequest, StoryLayer, CreateLayerRequest, LayerChain, ScanOrgPRsResult, SnoozeDuration } from './types';
+import type { ContextEntry, Story, CreateStoryRequest, StoryTask, CreateTaskRequest, LayerChain, ScanOrgPRsResult, SnoozeDuration } from './types';
 
 const BASE = '/api';
 
@@ -39,20 +39,31 @@ export const api = {
     return request(`/stories/${id}`, { method: 'DELETE' });
   },
 
-  addLayer(storyId: string, data: CreateLayerRequest): Promise<StoryLayer> {
-    return request(`/stories/${storyId}/layers`, { method: 'POST', body: JSON.stringify(data) });
+  addTask(storyId: string, data: CreateTaskRequest): Promise<StoryTask> {
+    return request(`/stories/${storyId}/tasks`, { method: 'POST', body: JSON.stringify(data) });
   },
 
-  updateLayer(storyId: string, layerId: string, data: Partial<StoryLayer>): Promise<StoryLayer> {
-    return request(`/stories/${storyId}/layers/${layerId}`, { method: 'PUT', body: JSON.stringify(data) });
+  updateTask(storyId: string, taskId: string, data: Partial<StoryTask>): Promise<StoryTask> {
+    return request(`/stories/${storyId}/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(data) });
   },
 
-  deleteLayer(storyId: string, layerId: string): Promise<void> {
-    return request(`/stories/${storyId}/layers/${layerId}`, { method: 'DELETE' });
+  deleteTask(storyId: string, taskId: string): Promise<void> {
+    return request(`/stories/${storyId}/tasks/${taskId}`, { method: 'DELETE' });
   },
 
-  refreshLayerPR(storyId: string, layerId: string): Promise<StoryLayer> {
-    return request(`/stories/${storyId}/layers/${layerId}/refresh-pr`, { method: 'POST' });
+  refreshTaskPR(storyId: string, taskId: string): Promise<StoryTask> {
+    return request(`/stories/${storyId}/tasks/${taskId}/refresh-pr`, { method: 'POST' });
+  },
+
+  addTaskDep(storyId: string, taskId: string, dependsOnId: string): Promise<void> {
+    return request(`/stories/${storyId}/tasks/${taskId}/deps`, {
+      method: 'POST',
+      body: JSON.stringify({ depends_on_id: dependsOnId }),
+    });
+  },
+
+  removeTaskDep(storyId: string, taskId: string, depId: string): Promise<void> {
+    return request(`/stories/${storyId}/tasks/${taskId}/deps/${depId}`, { method: 'DELETE' });
   },
 
   refreshAllPRs(): Promise<Story[]> {

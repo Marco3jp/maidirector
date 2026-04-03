@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Story, StoryStatus, LayerChain, LayerStatus, StoryLayer, SnoozeDuration } from '../api/types';
+import type { Story, StoryStatus, LayerChain, TaskStatus, StoryTask, SnoozeDuration } from '../api/types';
 import { api } from '../api/client';
 
 const SNOOZE_OPTIONS: { label: string; value: SnoozeDuration }[] = [
@@ -36,14 +36,14 @@ function extractRepoName(link: string): string | null {
   }
 }
 
-const LAYER_STATUS_LABELS: Record<LayerStatus, string> = {
+const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   pending: '未着手',
   in_progress: '作業中',
   review: 'レビュー中',
   merged: 'マージ済',
 };
 
-const LAYER_STATUS_COLORS: Record<LayerStatus, string> = {
+const TASK_STATUS_COLORS: Record<TaskStatus, string> = {
   pending: '#6b7280',
   in_progress: '#3b82f6',
   review: '#f59e0b',
@@ -80,20 +80,20 @@ const CI_STATUS_DISPLAY: Record<string, { label: string; color: string; icon: st
   PENDING: { label: 'CI 実行中', color: '#f59e0b', icon: '⏳' },
 };
 
-function getPRStatusLabel(layer: StoryLayer): { label: string; color: string; className: string } {
-  if (!layer.pr_url) {
+function getPRStatusLabel(t: StoryTask): { label: string; color: string; className: string } {
+  if (!t.pr_url) {
     return { label: '未着手', color: '#6b7280', className: 'pipeline-pr-state-none' };
   }
-  if (layer.pr_state === 'MERGED') {
+  if (t.pr_state === 'MERGED') {
     return { label: 'マージ済み', color: '#8b5cf6', className: 'pipeline-pr-state-merged' };
   }
-  if (layer.pr_is_draft) {
+  if (t.pr_is_draft) {
     return { label: 'オープン（ドラフト）', color: '#6b7280', className: 'pipeline-pr-state-draft' };
   }
-  if (layer.pr_state === 'OPEN') {
+  if (t.pr_state === 'OPEN') {
     return { label: 'オープン', color: '#22c55e', className: 'pipeline-pr-state-open' };
   }
-  if (layer.pr_state === 'CLOSED') {
+  if (t.pr_state === 'CLOSED') {
     return { label: 'クローズ', color: '#ef4444', className: 'pipeline-pr-state-closed' };
   }
   return { label: '未着手', color: '#6b7280', className: 'pipeline-pr-state-none' };
@@ -134,6 +134,15 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
     }
   };
 
+  const handleStoryPriorityChange = async (story: Story, newPriority: number) => {
+    try {
+      await api.updateStory(story.id, { ...story, priority: newPriority });
+      onRefresh();
+    } catch (e) {
+      console.error('Failed to update story priority:', e);
+    }
+  };
+
   const handleSnooze = async (id: string, duration: SnoozeDuration) => {
     setSnoozeMenuId(null);
     try {
@@ -153,52 +162,70 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
     }
   };
 
-  const handleLayerStatusChange = async (story: Story, layerId: string, newStatus: LayerStatus) => {
+  const handleTaskStatusChange = async (story: Story, taskId: string, newStatus: TaskStatus) => {
     try {
-      const layer = story.layers.find((l) => l.id === layerId);
-      if (!layer) return;
-      await api.updateLayer(story.id, layerId, { ...layer, status: newStatus });
+      const t = story.tasks.find((t) => t.id === taskId);
+      if (!t) return;
+      await api.updateTask(story.id, taskId, { ...t, status: newStatus });
       onRefresh();
     } catch (e) {
-      console.error('Failed to update layer:', e);
+      console.error('Failed to update task:', e);
     }
   };
 
-  const handleSetPRUrl = async (story: Story, layerId: string, prUrl: string) => {
+  const handleSetPRUrl = async (story: Story, taskId: string, prUrl: string) => {
     try {
-      const layer = story.layers.find((l) => l.id === layerId);
-      if (!layer) return;
-      await api.updateLayer(story.id, layerId, { ...layer, pr_url: prUrl });
+      const t = story.tasks.find((t) => t.id === taskId);
+      if (!t) return;
+      await api.updateTask(story.id, taskId, { ...t, pr_url: prUrl });
       onRefresh();
     } catch (e) {
       console.error('Failed to set PR URL:', e);
     }
   };
 
-  const handleRefreshPR = async (storyId: string, layerId: string) => {
+  const handleRefreshPR = async (storyId: string, taskId: string) => {
     try {
-      await api.refreshLayerPR(storyId, layerId);
+      await api.refreshTaskPR(storyId, taskId);
       onRefresh();
     } catch (e) {
       console.error('Failed to refresh PR:', e);
     }
   };
 
-  const handleAddLayer = async (storyId: string, layerName: string) => {
+  const handleAddTask = async (storyId: string, taskName: string) => {
     try {
-      await api.addLayer(storyId, { layer_name: layerName });
+      await api.addTask(storyId, { name: taskName });
       onRefresh();
     } catch (e) {
-      console.error('Failed to add layer:', e);
+      console.error('Failed to add task:', e);
     }
   };
 
-  const handleDeleteLayer = async (storyId: string, layerId: string) => {
+  const handleDeleteTask = async (storyId: string, taskId: string) => {
     try {
-      await api.deleteLayer(storyId, layerId);
+      await api.deleteTask(storyId, taskId);
       onRefresh();
     } catch (e) {
-      console.error('Failed to delete layer:', e);
+      console.error('Failed to delete task:', e);
+    }
+  };
+
+  const handleAddDep = async (storyId: string, taskId: string, dependsOnId: string) => {
+    try {
+      await api.addTaskDep(storyId, taskId, dependsOnId);
+      onRefresh();
+    } catch (e) {
+      console.error('Failed to add dep:', e);
+    }
+  };
+
+  const handleRemoveDep = async (storyId: string, taskId: string, depId: string) => {
+    try {
+      await api.removeTaskDep(storyId, taskId, depId);
+      onRefresh();
+    } catch (e) {
+      console.error('Failed to remove dep:', e);
     }
   };
 
@@ -210,13 +237,16 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
     [chains],
   );
 
-  const isBlocked = (story: Story, layerIndex: number): boolean => {
-    if (layerIndex === 0) return false;
-    const prevLayer = story.layers[layerIndex - 1];
-    return prevLayer ? prevLayer.status !== 'merged' : false;
+  const isBlocked = (story: Story, t: StoryTask): boolean => {
+    if (!t.depends_on || t.depends_on.length === 0) return false;
+    const taskById = Object.fromEntries(story.tasks.map((s) => [s.id, s]));
+    return t.depends_on.some((depId) => {
+      const dep = taskById[depId];
+      return dep ? dep.status !== 'merged' : false;
+    });
   };
 
-  const singleTaskStories = stories.filter((s) => s.layers.length === 0);
+  const singleTaskStories = stories.filter((s) => s.tasks.length === 0);
   const repoNames = [...new Set(
     singleTaskStories.flatMap((s) => s.links.map(extractRepoName).filter((r): r is string => r !== null))
   )].sort();
@@ -234,7 +264,7 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
   };
 
   const filteredStories = stories.filter((s) => {
-    if (s.layers.length > 0) return true;
+    if (s.tasks.length > 0) return true;
     if (hiddenRepos.size === 0) return true;
     const repo = s.links.map(extractRepoName).find((r): r is string => r !== null);
     return !repo || !hiddenRepos.has(repo);
@@ -275,10 +305,9 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
       </div>
       {filteredStories.map((story) => {
         const chainLayers = getChainLayers(story.layer_chain);
-        const missingLayers = chainLayers.filter(
-          (name) => !story.layers.some((l) => l.layer_name === name),
-        );
-        const isSingleTask = story.layers.length === 0;
+        const existingNames = new Set(story.tasks.map((t) => t.name));
+        const missingLayers = chainLayers.filter((name) => !existingNames.has(name));
+        const isSingleTask = story.tasks.length === 0;
         const isSnoozed = story.snoozed_until ? new Date(story.snoozed_until) > new Date() : false;
         const snoozeLabel = formatSnoozedUntil(story.snoozed_until);
 
@@ -342,15 +371,13 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
                 >
                   📝
                 </button>
-                {!isSingleTask && (
-                  <button
-                    className="btn-icon"
-                    onClick={() => setExpandedId(expandedId === story.id ? null : story.id)}
-                    title="レイヤー管理"
-                  >
-                    ⚙
-                  </button>
-                )}
+                <button
+                  className="btn-icon"
+                  onClick={() => setExpandedId(expandedId === story.id ? null : story.id)}
+                  title="タスク管理"
+                >
+                  ⚙
+                </button>
                 <button
                   className="btn-icon btn-danger"
                   onClick={() => handleDelete(story.id)}
@@ -385,18 +412,20 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
 
             {!isSingleTask && (
               <div className="pipeline">
-                {story.layers.map((layer, idx) => {
-                  const blocked = isBlocked(story, idx);
+                {story.tasks.map((t, idx) => {
+                  const blocked = isBlocked(story, t);
+                  const prevTask = idx > 0 ? story.tasks[idx - 1] : null;
+                  const showArrow = prevTask !== null && t.depends_on.includes(prevTask.id);
                   return (
                     <PipelineStage
-                      key={layer.id}
-                      layer={layer}
+                      key={t.id}
+                      task={t}
                       storyId={story.id}
-                      idx={idx}
+                      showArrow={showArrow}
                       blocked={blocked}
-                      onStatusChange={(newStatus) => handleLayerStatusChange(story, layer.id, newStatus)}
-                      onSetPRUrl={(prUrl) => handleSetPRUrl(story, layer.id, prUrl)}
-                      onRefreshPR={() => handleRefreshPR(story.id, layer.id)}
+                      onStatusChange={(newStatus) => handleTaskStatusChange(story, t.id, newStatus)}
+                      onSetPRUrl={(prUrl) => handleSetPRUrl(story, t.id, prUrl)}
+                      onRefreshPR={() => handleRefreshPR(story.id, t.id)}
                     />
                   );
                 })}
@@ -413,6 +442,18 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
                 <option value="completed">完了</option>
                 <option value="archived">アーカイブ</option>
               </select>
+              <select
+                className="story-priority-select"
+                value={story.priority}
+                onChange={(e) => handleStoryPriorityChange(story, Number(e.target.value))}
+              >
+                <option value={0}>優先度なし</option>
+                <option value={1}>P1 (最高)</option>
+                <option value={2}>P2</option>
+                <option value={3}>P3 (普通)</option>
+                <option value={4}>P4</option>
+                <option value={5}>P5 (低)</option>
+              </select>
             </div>
 
             {contextId === story.id && (
@@ -420,11 +461,13 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
             )}
 
             {expandedId === story.id && (
-              <LayerManager
+              <TaskManager
                 story={story}
                 missingLayers={missingLayers}
-                onAddLayer={handleAddLayer}
-                onDeleteLayer={handleDeleteLayer}
+                onAddTask={handleAddTask}
+                onDeleteTask={handleDeleteTask}
+                onAddDep={handleAddDep}
+                onRemoveDep={handleRemoveDep}
               />
             )}
           </div>
@@ -435,19 +478,19 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
 }
 
 function PipelineStage({
-  layer,
+  task,
   storyId,
-  idx,
+  showArrow,
   blocked,
   onStatusChange,
   onSetPRUrl,
   onRefreshPR,
 }: {
-  layer: StoryLayer;
+  task: StoryTask;
   storyId: string;
-  idx: number;
+  showArrow: boolean;
   blocked: boolean;
-  onStatusChange: (status: LayerStatus) => void;
+  onStatusChange: (status: TaskStatus) => void;
   onSetPRUrl: (prUrl: string) => void;
   onRefreshPR: () => void;
 }) {
@@ -472,40 +515,40 @@ function PipelineStage({
     }
   };
 
-  const prStatus = getPRStatusLabel(layer);
-  const ciInfo = layer.pr_check_status ? CI_STATUS_DISPLAY[layer.pr_check_status] : null;
+  const prStatus = getPRStatusLabel(task);
+  const ciInfo = task.pr_check_status ? CI_STATUS_DISPLAY[task.pr_check_status] : null;
 
   return (
     <div className={`pipeline-stage ${blocked ? 'pipeline-blocked' : ''}`}>
       <div className="pipeline-connector">
-        {idx > 0 && <span className="pipeline-arrow">→</span>}
+        {showArrow && <span className="pipeline-arrow">→</span>}
       </div>
       <div
         className="pipeline-card"
-        style={{ borderTopColor: LAYER_STATUS_COLORS[layer.status] }}
+        style={{ borderTopColor: TASK_STATUS_COLORS[task.status] }}
       >
-        <div className="pipeline-layer-name">{layer.layer_name}</div>
+        <div className="pipeline-layer-name">{task.name}</div>
         <span
           className="pipeline-status"
-          style={{ backgroundColor: LAYER_STATUS_COLORS[layer.status] }}
+          style={{ backgroundColor: TASK_STATUS_COLORS[task.status] }}
         >
-          {LAYER_STATUS_LABELS[layer.status]}
+          {TASK_STATUS_LABELS[task.status]}
         </span>
 
         <span className={`pipeline-pr-state ${prStatus.className}`} style={{ color: prStatus.color }}>
           {prStatus.label}
         </span>
 
-        {layer.pr_url ? (
+        {task.pr_url ? (
           <div className="pipeline-pr-info">
             <div className="pipeline-pr-header">
               <a
-                href={layer.pr_url}
+                href={task.pr_url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="pipeline-pr-link"
               >
-                PR #{layer.pr_number || '?'}
+                PR #{task.pr_number || '?'}
               </a>
               <button
                 className="btn-icon btn-refresh"
@@ -516,18 +559,18 @@ function PipelineStage({
                 {refreshing ? '...' : '↻'}
               </button>
             </div>
-            {layer.pr_title && (
-              <div className="pipeline-pr-title" title={layer.pr_title}>
-                {layer.pr_title.length > 30 ? layer.pr_title.slice(0, 30) + '…' : layer.pr_title}
+            {task.pr_title && (
+              <div className="pipeline-pr-title" title={task.pr_title}>
+                {task.pr_title.length > 30 ? task.pr_title.slice(0, 30) + '…' : task.pr_title}
               </div>
             )}
             <div className="pipeline-pr-meta">
-              {layer.pr_review_decision && (
+              {task.pr_review_decision && (
                 <span
                   className="pipeline-pr-review"
-                  style={{ color: REVIEW_COLORS[layer.pr_review_decision] || 'var(--text-muted)' }}
+                  style={{ color: REVIEW_COLORS[task.pr_review_decision] || 'var(--text-muted)' }}
                 >
-                  {REVIEW_LABELS[layer.pr_review_decision] || layer.pr_review_decision}
+                  {REVIEW_LABELS[task.pr_review_decision] || task.pr_review_decision}
                 </span>
               )}
               {ciInfo && (
@@ -564,8 +607,8 @@ function PipelineStage({
 
         <select
           className="pipeline-status-select"
-          value={layer.status}
-          onChange={(e) => onStatusChange(e.target.value as LayerStatus)}
+          value={task.status}
+          onChange={(e) => onStatusChange(e.target.value as TaskStatus)}
         >
           <option value="pending">未着手</option>
           <option value="in_progress">作業中</option>
@@ -612,29 +655,33 @@ function ContextInput({ storyId, onAdded }: { storyId: string; onAdded: () => vo
   );
 }
 
-function LayerManager({
+function TaskManager({
   story,
   missingLayers,
-  onAddLayer,
-  onDeleteLayer,
+  onAddTask,
+  onDeleteTask,
+  onAddDep,
+  onRemoveDep,
 }: {
   story: Story;
   missingLayers: string[];
-  onAddLayer: (storyId: string, layerName: string) => void;
-  onDeleteLayer: (storyId: string, layerId: string) => void;
+  onAddTask: (storyId: string, taskName: string) => void;
+  onDeleteTask: (storyId: string, taskId: string) => void;
+  onAddDep: (storyId: string, taskId: string, dependsOnId: string) => void;
+  onRemoveDep: (storyId: string, taskId: string, depId: string) => void;
 }) {
   const [customName, setCustomName] = useState('');
 
   const handleAddCustom = (e: React.FormEvent) => {
     e.preventDefault();
     if (!customName.trim()) return;
-    onAddLayer(story.id, customName.trim());
+    onAddTask(story.id, customName.trim());
     setCustomName('');
   };
 
   return (
     <div className="layer-manager">
-      <div className="layer-manager-header">レイヤー管理</div>
+      <div className="layer-manager-header">タスク管理</div>
 
       {missingLayers.length > 0 && (
         <div className="layer-quick-add">
@@ -642,7 +689,7 @@ function LayerManager({
             <button
               key={name}
               className="layer-add-btn"
-              onClick={() => onAddLayer(story.id, name)}
+              onClick={() => onAddTask(story.id, name)}
             >
               + {name}
             </button>
@@ -653,7 +700,7 @@ function LayerManager({
       <form className="layer-custom-add" onSubmit={handleAddCustom}>
         <input
           type="text"
-          placeholder="カスタムレイヤー名..."
+          placeholder="タスク名..."
           value={customName}
           onChange={(e) => setCustomName(e.target.value)}
         />
@@ -662,24 +709,62 @@ function LayerManager({
         </button>
       </form>
 
-      {story.layers.length > 0 && (
+      {story.tasks.length > 0 && (
         <div className="layer-list-manage">
-          {story.layers.map((layer) => (
-            <div key={layer.id} className="layer-manage-item">
-              <span>{layer.layer_name}</span>
-              {layer.pr_url && (
-                <span className="layer-manage-pr">
-                  PR #{layer.pr_number || '?'} ({layer.pr_state || '未取得'})
-                </span>
-              )}
-              <button
-                className="btn-icon btn-danger"
-                onClick={() => onDeleteLayer(story.id, layer.id)}
-              >
-                ✕
-              </button>
-            </div>
-          ))}
+          {story.tasks.map((t) => {
+            const depTasks = story.tasks.filter((other) => t.depends_on.includes(other.id));
+            const availableForDep = story.tasks.filter(
+              (other) => other.id !== t.id && !t.depends_on.includes(other.id),
+            );
+            return (
+              <div key={t.id} className="layer-manage-item">
+                <div className="layer-manage-main">
+                  <span>{t.name}</span>
+                  {t.pr_url && (
+                    <span className="layer-manage-pr">
+                      PR #{t.pr_number || '?'} ({t.pr_state || '未取得'})
+                    </span>
+                  )}
+                  <button
+                    className="btn-icon btn-danger"
+                    onClick={() => onDeleteTask(story.id, t.id)}
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="layer-manage-deps">
+                  {depTasks.map((dep) => (
+                    <span key={dep.id} className="dep-badge">
+                      {dep.name}
+                      <button
+                        className="dep-remove"
+                        onClick={() => onRemoveDep(story.id, t.id, dep.id)}
+                        title="依存を解除"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  {availableForDep.length > 0 && (
+                    <select
+                      className="dep-add-select"
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) onAddDep(story.id, t.id, e.target.value);
+                      }}
+                    >
+                      <option value="">+ 依存を追加...</option>
+                      {availableForDep.map((other) => (
+                        <option key={other.id} value={other.id}>
+                          {other.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

@@ -10,11 +10,13 @@ type StoryStore interface {
 	DeleteStory(id string) error
 	SnoozeStory(id string, until time.Time) error
 	UnsnoozeStory(id string) error
-	CreateStoryLayer(l *StoryLayer) error
-	GetStoryLayer(id string) (*StoryLayer, error)
-	ListStoryLayers(storyID string) ([]*StoryLayer, error)
-	UpdateStoryLayer(l *StoryLayer) error
-	DeleteStoryLayer(id string) error
+	CreateStoryTask(t *StoryTask) error
+	GetStoryTask(id string) (*StoryTask, error)
+	ListStoryTasks(storyID string) ([]*StoryTask, error)
+	UpdateStoryTask(t *StoryTask) error
+	DeleteStoryTask(id string) error
+	AddTaskDep(taskID, dependsOnID string) error
+	RemoveTaskDep(taskID, dependsOnID string) error
 	CreateContextEntry(e *ContextEntry) error
 	ListContextEntries(storyID string) ([]*ContextEntry, error)
 	SetSetting(key, value string) error
@@ -58,24 +60,32 @@ func (s *StoryService) Unsnooze(id string) error {
 	return s.store.UnsnoozeStory(id)
 }
 
-func (s *StoryService) AddLayer(l *StoryLayer) error {
-	return s.store.CreateStoryLayer(l)
+func (s *StoryService) AddTask(t *StoryTask) error {
+	return s.store.CreateStoryTask(t)
 }
 
-func (s *StoryService) GetLayer(id string) (*StoryLayer, error) {
-	return s.store.GetStoryLayer(id)
+func (s *StoryService) GetTask(id string) (*StoryTask, error) {
+	return s.store.GetStoryTask(id)
 }
 
-func (s *StoryService) ListLayers(storyID string) ([]*StoryLayer, error) {
-	return s.store.ListStoryLayers(storyID)
+func (s *StoryService) ListTasks(storyID string) ([]*StoryTask, error) {
+	return s.store.ListStoryTasks(storyID)
 }
 
-func (s *StoryService) UpdateLayer(l *StoryLayer) error {
-	return s.store.UpdateStoryLayer(l)
+func (s *StoryService) UpdateTask(t *StoryTask) error {
+	return s.store.UpdateStoryTask(t)
 }
 
-func (s *StoryService) DeleteLayer(id string) error {
-	return s.store.DeleteStoryLayer(id)
+func (s *StoryService) DeleteTask(id string) error {
+	return s.store.DeleteStoryTask(id)
+}
+
+func (s *StoryService) AddTaskDep(taskID, dependsOnID string) error {
+	return s.store.AddTaskDep(taskID, dependsOnID)
+}
+
+func (s *StoryService) RemoveTaskDep(taskID, dependsOnID string) error {
+	return s.store.RemoveTaskDep(taskID, dependsOnID)
 }
 
 func (s *StoryService) AddContext(entry *ContextEntry) error {

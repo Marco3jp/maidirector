@@ -256,36 +256,43 @@ func formatStories(stories []*task.Story) string {
 		if len(s.Tags) > 0 {
 			b.WriteString(fmt.Sprintf("  tags: %s\n", strings.Join(s.Tags, ", ")))
 		}
-		if len(s.Layers) == 0 {
-			b.WriteString("  レイヤー: なし（単タスク）\n")
+		if len(s.Tasks) == 0 {
+			b.WriteString("  タスク: なし（単タスク）\n")
 			continue
 		}
-		for i, l := range s.Layers {
+		taskByID := map[string]*task.StoryTask{}
+		for _, t := range s.Tasks {
+			taskByID[t.ID] = t
+		}
+		for i, t := range s.Tasks {
 			blocked := ""
-			if i > 0 && s.Layers[i-1].Status != task.LayerStatusMerged {
-				blocked = " [ブロック中]"
+			for _, depID := range t.DependsOn {
+				if dep, ok := taskByID[depID]; ok && dep.Status != task.TaskStatusMerged {
+					blocked = " [ブロック中]"
+					break
+				}
 			}
 			prInfo := ""
-			if l.PRUrl != "" {
-				prParts := []string{l.PRUrl}
-				if l.PRState != "" {
-					prParts = append(prParts, "state:"+l.PRState)
+			if t.PRUrl != "" {
+				prParts := []string{t.PRUrl}
+				if t.PRState != "" {
+					prParts = append(prParts, "state:"+t.PRState)
 				}
-				if l.PRIsDraft {
+				if t.PRIsDraft {
 					prParts = append(prParts, "draft:true")
 				}
-				if l.PRReviewDecision != "" {
-					prParts = append(prParts, "review:"+l.PRReviewDecision)
+				if t.PRReviewDecision != "" {
+					prParts = append(prParts, "review:"+t.PRReviewDecision)
 				}
-				if l.PRCheckStatus != "" {
-					prParts = append(prParts, "ci:"+l.PRCheckStatus)
+				if t.PRCheckStatus != "" {
+					prParts = append(prParts, "ci:"+t.PRCheckStatus)
 				}
-				if l.PRTitle != "" {
-					prParts = append(prParts, l.PRTitle)
+				if t.PRTitle != "" {
+					prParts = append(prParts, t.PRTitle)
 				}
 				prInfo = fmt.Sprintf(" (PR: %s)", strings.Join(prParts, ", "))
 			}
-			b.WriteString(fmt.Sprintf("  %d. %s: %s%s%s\n", i+1, l.LayerName, l.Status, blocked, prInfo))
+			b.WriteString(fmt.Sprintf("  %d. %s: %s%s%s\n", i+1, t.Name, t.Status, blocked, prInfo))
 		}
 	}
 	return b.String()

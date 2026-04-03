@@ -1,5 +1,5 @@
 export type StoryStatus = 'active' | 'completed' | 'archived';
-export type LayerStatus = 'pending' | 'in_progress' | 'review' | 'merged';
+export type TaskStatus = 'pending' | 'in_progress' | 'review' | 'merged';
 
 export interface Story {
   id: string;
@@ -15,14 +15,14 @@ export interface Story {
   last_active_at: string;
   created_at: string;
   updated_at: string;
-  layers: StoryLayer[];
+  tasks: StoryTask[];
 }
 
-export interface StoryLayer {
+export interface StoryTask {
   id: string;
   story_id: string;
-  layer_name: string;
-  status: LayerStatus;
+  name: string;
+  status: TaskStatus;
   pr_url: string;
   pr_number: number;
   pr_state: string;
@@ -31,6 +31,7 @@ export interface StoryLayer {
   pr_is_draft: boolean;
   pr_check_status: string;
   sort_order: number;
+  depends_on: string[];
   created_at: string;
   updated_at: string;
 }
@@ -53,9 +54,9 @@ export interface CreateStoryRequest {
   tags?: string[];
 }
 
-export interface CreateLayerRequest {
-  layer_name: string;
-  status?: LayerStatus;
+export interface CreateTaskRequest {
+  name: string;
+  status?: TaskStatus;
   pr_url?: string;
 }
 

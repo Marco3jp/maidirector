@@ -32,45 +32,46 @@ const (
 	StoryStatusArchived  StoryStatus = "archived"
 )
 
-type LayerStatus string
+type TaskStatus string
 
 const (
-	LayerStatusPending    LayerStatus = "pending"
-	LayerStatusInProgress LayerStatus = "in_progress"
-	LayerStatusReview     LayerStatus = "review"
-	LayerStatusMerged     LayerStatus = "merged"
+	TaskStatusPending    TaskStatus = "pending"
+	TaskStatusInProgress TaskStatus = "in_progress"
+	TaskStatusReview     TaskStatus = "review"
+	TaskStatusMerged     TaskStatus = "merged"
 )
 
 type Story struct {
-	ID           string        `json:"id"`
-	Title        string        `json:"title"`
-	Description  string        `json:"description"`
-	LayerChain   string        `json:"layer_chain"`
-	Status       StoryStatus   `json:"status"`
-	Priority     int           `json:"priority"`
-	Project      string        `json:"project"`
-	Links        []string      `json:"links"`
-	Tags         []string      `json:"tags"`
-	SnoozedUntil *time.Time    `json:"snoozed_until"`
-	LastActiveAt time.Time     `json:"last_active_at"`
-	CreatedAt    time.Time     `json:"created_at"`
-	UpdatedAt    time.Time     `json:"updated_at"`
-	Layers       []*StoryLayer `json:"layers"`
+	ID           string       `json:"id"`
+	Title        string       `json:"title"`
+	Description  string       `json:"description"`
+	LayerChain   string       `json:"layer_chain"`
+	Status       StoryStatus  `json:"status"`
+	Priority     int          `json:"priority"`
+	Project      string       `json:"project"`
+	Links        []string     `json:"links"`
+	Tags         []string     `json:"tags"`
+	SnoozedUntil *time.Time   `json:"snoozed_until"`
+	LastActiveAt time.Time    `json:"last_active_at"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
+	Tasks        []*StoryTask `json:"tasks"`
 }
 
-type StoryLayer struct {
-	ID               string      `json:"id"`
-	StoryID          string      `json:"story_id"`
-	LayerName        string      `json:"layer_name"`
-	Status           LayerStatus `json:"status"`
-	PRUrl            string      `json:"pr_url"`
-	PRNumber         int         `json:"pr_number"`
-	PRState          string      `json:"pr_state"`
-	PRTitle          string      `json:"pr_title"`
-	PRReviewDecision string      `json:"pr_review_decision"`
-	PRIsDraft        bool        `json:"pr_is_draft"`
-	PRCheckStatus    string      `json:"pr_check_status"`
-	SortOrder        int         `json:"sort_order"`
-	CreatedAt        time.Time   `json:"created_at"`
-	UpdatedAt        time.Time   `json:"updated_at"`
+type StoryTask struct {
+	ID               string     `json:"id"`
+	StoryID          string     `json:"story_id"`
+	Name             string     `json:"name"`
+	Status           TaskStatus `json:"status"`
+	PRUrl            string     `json:"pr_url"`
+	PRNumber         int        `json:"pr_number"`
+	PRState          string     `json:"pr_state"`
+	PRTitle          string     `json:"pr_title"`
+	PRReviewDecision string     `json:"pr_review_decision"`
+	PRIsDraft        bool       `json:"pr_is_draft"`
+	PRCheckStatus    string     `json:"pr_check_status"`
+	SortOrder        int        `json:"sort_order"`
+	DependsOn        []string   `json:"depends_on"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }

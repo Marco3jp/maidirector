@@ -5,8 +5,8 @@
 
 ## Status
 
-- **現在のフェーズ**: Phase 2c'' 完了 → Phase 2c''' 着手待ち
-- **直近の完了**: Phase 2c'（スヌーズ）+ Phase 2c''（リポジトリ非表示フィルタ + ツールバー整理）
+- **現在のフェーズ**: Phase 3a 完了 → Phase 3b 着手待ち
+- **直近の完了**: Phase 3a（Task Dependency DAG: story_layers → story_tasks リネーム + task_dependencies テーブルによる任意依存関係）
 - **次にやること**: Phase 2c'''（Suggest/Chat のレビュー待ち判定改善）→ Phase 2d（チャットからのタスク操作）
 
 ## Roadmap
@@ -69,7 +69,18 @@
 - macOS デスクトップ通知 (osascript)
 - ローリングサマリーの自動化
 
-### Phase 3: 音声 + 高度な機能
+### Phase 3: データモデル進化 + 音声 + 高度な機能
+
+#### Phase 3a: Task Dependency DAG ✅
+- `story_layers` → `story_tasks` テーブルへリネーム移行（`layer_name` → `name`）
+- `task_dependencies` ジャンクションテーブル追加（任意の DAG 依存関係）
+- ブロッキング判定を `sort_order` 順 → `depends_on` リストベースに変更
+- レイヤーチェーンテンプレート選択時、ストーリー作成と同時にタスクと依存を自動生成
+- `TaskManager` コンポーネント: タスク追加 + 依存セレクトで deps を追加・解除
+- パイプラインの矢印（`→`）は `depends_on` が存在するペア間のみ表示
+- 独立タスク（`depends_on` が空）はブロックなし、矢印なしで並列表示
+
+#### Phase 3b: 音声 + LLM アップグレード（予定）
 - 音声入力 (Chrome SpeechRecognition API)、音声出力 (Web Speech Synthesis API)
 - LLM アップグレード (OpenAI/Anthropic API 切替オプション)
 - サブエージェントによるタスク状況の自動調査
@@ -111,12 +122,19 @@ stories テーブル
   - last_active_at, created_at, updated_at
   - ソート: CASE WHEN snoozed_until > CURRENT_TIMESTAMP THEN 1 ELSE 0 END ASC, priority ASC, created_at ASC
 
-story_layers テーブル
-  - id, story_id, layer_name, status (pending/in_progress/review/merged)
+story_tasks テーブル（Phase 3a で story_layers からリネーム移行）
+  - id, story_id, name （旧 layer_name）, status (pending/in_progress/review/merged)
   - pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft (INTEGER), pr_check_status
-  - sort_order (ブロック判定に使用。直前レイヤーが merged でなければブロック中)
+  - sort_order（表示順のみ。ブロッキング判定には使用しない）
   - created_at, updated_at
   - FOREIGN KEY (story_id) → stories(id) ON DELETE CASCADE
+
+task_dependencies テーブル（Phase 3a 追加）
+  - task_id, depends_on_id (共に story_tasks.id への FK, ON DELETE CASCADE)
+  - PRIMARY KEY (task_id, depends_on_id)
+  - ブロッキング判定: depends_on_id のステータスが merged でなければブロック中
+
+story_layers テーブル（互換性維持のため残存中。後で DROP 予定）
 
 settings テーブル
   - key (PRIMARY KEY), value, updated_at
@@ -156,8 +174,9 @@ CI FAILURE修正 > CI PENDING待ち > 進行中完了 > 高優先度 > 長時間
 
 - Phase 2c''': Suggest/Chat でレビュー待ち PR を「次にやるべき」から除外する判定が未実装
 - Phase 2d: チャットからのタスク操作（Ollama tool use）が未実装
-- 全レイヤー完了時にストーリーを自動完了扱いにする機能が未実装
-- Chrome SpeechRecognition API のブラウザ制限（Phase 3 以降の課題）
+- 全タスク完了時にストーリーを自動完了扱いにする機能が未実装
+- Chrome SpeechRecognition API のブラウザ制限（Phase 3b 以降の課題）
+- `story_layers` テーブルは互換性維持のため残存中。`story_tasks` への移行完了確認後に `DROP TABLE story_layers` マイグレーションを追加して削除すること
 
 ## Session Log
 
@@ -194,6 +213,19 @@ CI FAILURE修正 > CI PENDING待ち > 進行中完了 > 高優先度 > 長時間
 - `POST /api/stories/{id}/snooze` / `POST /api/stories/{id}/unsnooze` エンドポイント追加
 - フロントエンド: ⏰ ボタン + ドロップダウン + 残り時間バッジ + クライアント側 setTimeout
 - 動作確認: スヌーズ適用 → リスト最下部移動 + 「29分後に復帰」バッジ表示
+
+### 2026-04-03: Phase 3a – Task Dependency DAG
+- `story_tasks` テーブル作成（`story_layers` から `layer_name → name` でリネーム移行）
+- `task_dependencies` ジャンクションテーブル追加（`task_id`, `depends_on_id`, PRIMARY KEY + ON DELETE CASCADE）
+- マイグレーション: `story_layers` → `story_tasks` コピー + 隣接タスク間 dep 自動生成（既存チェーン再現）
+- `StoryTask` 構造体（`Name`, `DependsOn []string` フィールド）、`StoryStore` インターフェース更新
+- `CreateStory` API でテンプレート指定時にタスク + deps を自動生成（`createTemplateTasksForStory`）
+- deps 追加・削除 API: `POST /api/stories/{storyId}/tasks/{taskId}/deps`, `DELETE .../deps/{depId}`
+- `formatStories` のブロック判定を `DependsOn` ベースに変更
+- フロントエンド: `StoryTask` 型 + `depends_on: string[]`、`/tasks` API パス、`isBlocked` 関数を deps ベースに変更
+- `TaskManager` コンポーネント: 依存追加セレクト + dep バッジ解除ボタン
+- パイプラインの矢印は `depends_on` に前タスクの ID が含まれる場合のみ表示
+- 動作確認: `go build ./...` → 正常終了、`npx tsc --noEmit` → 正常終了
 
 ### 2026-04-03: Phase 2c'' – リポジトリ非表示フィルタ + ツールバー整理
 - ヘッダーに「🔍 組織PRスキャン」「↻ 全PR情報を更新」を並置（`App.tsx` の `header-actions`）

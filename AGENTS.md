@@ -8,6 +8,19 @@
 
 `./dev.sh` を実行すると全依存サービス（Qdrant, Ollama, バックエンド, フロントエンド）が一括で起動する。起動済みのサービスはスキップされる。
 
+### サンドボックス制限について
+
+SQLite DB は `~/.maidirector/data.db`（プロジェクトディレクトリ外）に配置される。  
+Cursor のサンドボックスモードではプロジェクト外への書き込みが制限されるため、**バックエンドの起動・API 確認・ブラウザ確認を伴うシェルコマンドは必ず `required_permissions: ["all"]` を付けて実行すること。**
+
+```bash
+# NG: サンドボックス内では DB 書き込みに失敗する
+go run ./cmd/maidirector serve
+
+# OK: サンドボックス外で実行
+# → Shell ツールの required_permissions: ["all"] を使用
+```
+
 ## 作業完了の定義
 
 以下の**すべて**が完了するまで、作業完了としてはならない。必ずこの順序で実行すること。
@@ -67,7 +80,7 @@ cd web && npx tsc --noEmit             # TypeScript フロントエンド
 
 ### 確認用サーバーの停止
 
-動作確認完了後は必ず停止する。
+動作確認完了後は必ず停止する。**プロセス kill も `required_permissions: ["all"]` が必要。**
 
 ```bash
 lsof -ti:8080 | xargs kill          # バックエンド (port 8080)

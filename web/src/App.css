@@ -981,12 +981,62 @@ button:disabled {
 
 .layer-manage-item {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 4px 8px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
   background: var(--bg);
   border-radius: var(--radius-sm);
   font-size: 12px;
+}
+
+.layer-manage-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.layer-manage-deps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  padding-left: 4px;
+}
+
+.dep-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 2px 6px;
+  background: var(--accent-muted, rgba(59, 130, 246, 0.15));
+  color: var(--accent, #3b82f6);
+  border-radius: 10px;
+}
+
+.dep-remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.dep-remove:hover {
+  color: var(--danger, #ef4444);
+}
+
+.dep-add-select {
+  font-size: 11px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text);
+  cursor: pointer;
 }
 
 /* Story status badge */
@@ -1007,6 +1057,11 @@ button:disabled {
 }
 
 .story-status-select {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.story-priority-select {
   font-size: 12px;
   padding: 4px 8px;
 }

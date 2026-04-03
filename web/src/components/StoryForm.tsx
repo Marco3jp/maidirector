@@ -10,7 +10,7 @@ export function StoryForm({ onCreated }: Props) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [layerChain, setLayerChain] = useState('');
-  const [priority, setPriority] = useState(0);
+  const [priority, setPriority] = useState(3);
   const [project, setProject] = useState('');
   const [tagsInput, setTagsInput] = useState('');
   const [chains, setChains] = useState<LayerChain[]>([]);
@@ -44,7 +44,7 @@ export function StoryForm({ onCreated }: Props) {
       setTitle('');
       setDescription('');
       setLayerChain('');
-      setPriority(0);
+    setPriority(3);
       setProject('');
       setTagsInput('');
       setExpanded(false);
