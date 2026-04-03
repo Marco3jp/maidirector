@@ -469,6 +469,29 @@ func (s *Server) refreshPRStates() {
 				log.Printf("warning: failed to update task after PR refresh: %v", err)
 			}
 		}
+		if len(story.Tasks) == 0 && len(story.Links) > 0 {
+			s.checkAndCompleteReviewStory(story)
+		}
+	}
+}
+
+func (s *Server) checkAndCompleteReviewStory(story *task.Story) {
+	prURL := story.Links[0]
+	if _, _, _, ok := github.ParsePRURL(prURL); !ok {
+		return
+	}
+	info, err := s.ghClient.GetPRInfo(prURL)
+	if err != nil {
+		log.Printf("warning: failed to fetch PR info for review story %s: %v", story.ID, err)
+		return
+	}
+	if info.State == "MERGED" || info.State == "CLOSED" {
+		story.Status = task.StoryStatusCompleted
+		if err := s.storySvc.Update(story); err != nil {
+			log.Printf("warning: failed to complete review story %s: %v", story.ID, err)
+			return
+		}
+		s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: story})
 	}
 }
 
@@ -586,6 +609,8 @@ func (s *Server) handleScanOrgPRs(w http.ResponseWriter, r *http.Request) {
 	if err := s.storySvc.SetSetting(settingLastScanTime, time.Now().Format(time.RFC3339)); err != nil {
 		log.Printf("warning: failed to save last scan time: %v", err)
 	}
+
+	s.refreshPRStates()
 
 	result := map[string]any{
 		"scanned": len(prs),

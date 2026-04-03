@@ -400,6 +400,13 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
                     )}
                   </span>
                 ))}
+                {story.tasks.length === 0 && story.links.map((link, i) => (
+                  <span key={i} className="story-collapsed-task">
+                    <a href={link} target="_blank" rel="noopener noreferrer" className="story-collapsed-task-link">
+                      link
+                    </a>
+                  </span>
+                ))}
                 <button
                   className="btn-icon story-collapsed-expand"
                   onClick={() => setCollapsedIds((prev) => { const next = new Set(prev); next.delete(story.id); return next; })}

@@ -108,3 +108,6 @@ Go backend + React frontend フルスタック実装、embed.FS で単一バイ�
 
 ### 2026-04-03: Suggest 誤判定修正（Phase 2c''' 部分対応）
 単タスクストーリー（`Tasks` が空）の `Links` が LLM プロンプトに含まれていなかった問題と、`DependsOn` が空のタスクに「独立」が明示されていなかった問題を修正。`formatStories` で単タスクのリンクを出力、タスクに `[依存なし・独立タスク]` / `[上流: タスク名(ステータス)]` を明示。システムプロンプトの判断基準 2 に「depends_on で定義された同一ストーリー内の関係のみ」を明記。
+
+### 2026-04-03: PRスキャン由来レビューストーリーの自動完了
+`refreshPRStates()` を拡張し、タスクなし・`links[0]` に GitHub PR URL が含まれるストーリー（PRスキャン由来の `[Review]` ストーリー）を対象に PR 状態を確認、MERGED/CLOSED であればストーリーを `completed` に自動更新するロジック（`checkAndCompleteReviewStory`）を追加。`handleScanOrgPRs` の末尾でも `refreshPRStates()` を呼ぶことで、スキャン実行時・Suggest/Chat 時・全PR更新ボタン押下時の 3 タイミングで自動反映される。コンパイル確認済み（`go build ./...` 成功）。
