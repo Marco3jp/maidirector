@@ -128,6 +128,8 @@ func (s *Store) migrate() error {
 			value TEXT NOT NULL,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		// Phase 2c': スヌーズカラム
+		`ALTER TABLE stories ADD COLUMN snoozed_until DATETIME`,
 	}
 
 	for _, m := range migrations {
@@ -368,7 +370,7 @@ func (s *Store) CreateStory(st *task.Story) error {
 
 func (s *Store) GetStory(id string) (*task.Story, error) {
 	row := s.db.QueryRow(
-		`SELECT id, title, description, layer_chain, status, priority, project, links, tags, last_active_at, created_at, updated_at FROM stories WHERE id = ?`, id,
+		`SELECT id, title, description, layer_chain, status, priority, project, links, tags, snoozed_until, last_active_at, created_at, updated_at FROM stories WHERE id = ?`, id,
 	)
 	st, err := scanStoryRow(row)
 	if err != nil {
@@ -384,14 +386,14 @@ func (s *Store) GetStory(id string) (*task.Story, error) {
 }
 
 func (s *Store) ListStories(status string) ([]*task.Story, error) {
-	query := `SELECT id, title, description, layer_chain, status, priority, project, links, tags, last_active_at, created_at, updated_at FROM stories WHERE 1=1`
+	query := `SELECT id, title, description, layer_chain, status, priority, project, links, tags, snoozed_until, last_active_at, created_at, updated_at FROM stories WHERE 1=1`
 	args := []any{}
 
 	if status != "" {
 		query += ` AND status = ?`
 		args = append(args, status)
 	}
-	query += ` ORDER BY priority ASC, created_at ASC`
+	query += ` ORDER BY CASE WHEN snoozed_until > CURRENT_TIMESTAMP THEN 1 ELSE 0 END ASC, priority ASC, created_at ASC`
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -527,6 +529,16 @@ func (s *Store) GetStoryLayer(id string) (*task.StoryLayer, error) {
 	return scanStoryLayer(row)
 }
 
+func (s *Store) SnoozeStory(id string, until time.Time) error {
+	_, err := s.db.Exec(`UPDATE stories SET snoozed_until = ?, updated_at = ? WHERE id = ?`, until, time.Now(), id)
+	return err
+}
+
+func (s *Store) UnsnoozeStory(id string) error {
+	_, err := s.db.Exec(`UPDATE stories SET snoozed_until = NULL, updated_at = ? WHERE id = ?`, time.Now(), id)
+	return err
+}
+
 // --- Settings ---
 
 func (s *Store) SetSetting(key, value string) error {
@@ -599,14 +611,19 @@ func scanStoryRow(sc scannable) (*task.Story, error) {
 	st := &task.Story{}
 	var linksJSON, tagsJSON string
 	var lastActiveAt sql.NullTime
+	var snoozedUntil sql.NullTime
 
 	err := sc.Scan(
 		&st.ID, &st.Title, &st.Description, &st.LayerChain, &st.Status,
 		&st.Priority, &st.Project, &linksJSON, &tagsJSON,
-		&lastActiveAt, &st.CreatedAt, &st.UpdatedAt,
+		&snoozedUntil, &lastActiveAt, &st.CreatedAt, &st.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	if snoozedUntil.Valid {
+		st.SnoozedUntil = &snoozedUntil.Time
 	}
 
 	if lastActiveAt.Valid {

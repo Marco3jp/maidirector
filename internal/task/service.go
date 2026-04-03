@@ -1,11 +1,15 @@
 package task
 
+import "time"
+
 type StoryStore interface {
 	CreateStory(st *Story) error
 	GetStory(id string) (*Story, error)
 	ListStories(status string) ([]*Story, error)
 	UpdateStory(st *Story) error
 	DeleteStory(id string) error
+	SnoozeStory(id string, until time.Time) error
+	UnsnoozeStory(id string) error
 	CreateStoryLayer(l *StoryLayer) error
 	GetStoryLayer(id string) (*StoryLayer, error)
 	ListStoryLayers(storyID string) ([]*StoryLayer, error)
@@ -44,6 +48,14 @@ func (s *StoryService) Update(st *Story) error {
 
 func (s *StoryService) Delete(id string) error {
 	return s.store.DeleteStory(id)
+}
+
+func (s *StoryService) Snooze(id string, until time.Time) error {
+	return s.store.SnoozeStory(id, until)
+}
+
+func (s *StoryService) Unsnooze(id string) error {
+	return s.store.UnsnoozeStory(id)
 }
 
 func (s *StoryService) AddLayer(l *StoryLayer) error {

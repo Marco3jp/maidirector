@@ -1,6 +1,40 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Story, StoryStatus, LayerChain, LayerStatus, StoryLayer } from '../api/types';
+import type { Story, StoryStatus, LayerChain, LayerStatus, StoryLayer, SnoozeDuration } from '../api/types';
 import { api } from '../api/client';
+
+const SNOOZE_OPTIONS: { label: string; value: SnoozeDuration }[] = [
+  { label: '30分', value: '30m' },
+  { label: '1時間', value: '1h' },
+  { label: '3時間', value: '3h' },
+  { label: '明日まで（09:00）', value: 'tomorrow' },
+  { label: '来週まで（月 09:00）', value: 'next_week' },
+];
+
+function formatSnoozedUntil(snoozedUntil: string | null): string | null {
+  if (!snoozedUntil) return null;
+  const until = new Date(snoozedUntil);
+  const now = new Date();
+  if (until <= now) return null;
+  const diffMs = until.getTime() - now.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 60) return `${diffMin}分後に復帰`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `${diffH}時間後に復帰`;
+  const diffD = Math.floor(diffH / 24);
+  return `${diffD}日後に復帰`;
+}
+
+function extractRepoName(link: string): string | null {
+  try {
+    const url = new URL(link);
+    if (url.hostname !== 'github.com') return null;
+    const parts = url.pathname.split('/').filter(Boolean);
+    if (parts.length >= 2) return parts[1];
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 const LAYER_STATUS_LABELS: Record<LayerStatus, string> = {
   pending: '未着手',
@@ -74,23 +108,12 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
   const [chains, setChains] = useState<LayerChain[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [contextId, setContextId] = useState<string | null>(null);
-  const [refreshingAll, setRefreshingAll] = useState(false);
+  const [snoozeMenuId, setSnoozeMenuId] = useState<string | null>(null);
+  const [hiddenRepos, setHiddenRepos] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     api.getLayerChains().then(setChains).catch(console.error);
   }, []);
-
-  const handleRefreshAllPRs = async () => {
-    setRefreshingAll(true);
-    try {
-      await api.refreshAllPRs();
-      onRefresh();
-    } catch (e) {
-      console.error('Failed to refresh all PRs:', e);
-    } finally {
-      setRefreshingAll(false);
-    }
-  };
 
   const handleDelete = async (id: string) => {
     if (!confirm('このストーリーを削除しますか？')) return;
@@ -108,6 +131,25 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
       onRefresh();
     } catch (e) {
       console.error('Failed to update story:', e);
+    }
+  };
+
+  const handleSnooze = async (id: string, duration: SnoozeDuration) => {
+    setSnoozeMenuId(null);
+    try {
+      await api.snoozeStory(id, duration);
+      onRefresh();
+    } catch (e) {
+      console.error('Failed to snooze story:', e);
+    }
+  };
+
+  const handleUnsnooze = async (id: string) => {
+    try {
+      await api.unsnoozeStory(id);
+      onRefresh();
+    } catch (e) {
+      console.error('Failed to unsnooze story:', e);
     }
   };
 
@@ -174,7 +216,29 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
     return prevLayer ? prevLayer.status !== 'merged' : false;
   };
 
-  const hasLayers = stories.some((s) => s.layers.length > 0);
+  const singleTaskStories = stories.filter((s) => s.layers.length === 0);
+  const repoNames = [...new Set(
+    singleTaskStories.flatMap((s) => s.links.map(extractRepoName).filter((r): r is string => r !== null))
+  )].sort();
+
+  const toggleHiddenRepo = (repo: string) => {
+    setHiddenRepos((prev) => {
+      const next = new Set(prev);
+      if (next.has(repo)) {
+        next.delete(repo);
+      } else {
+        next.add(repo);
+      }
+      return next;
+    });
+  };
+
+  const filteredStories = stories.filter((s) => {
+    if (s.layers.length > 0) return true;
+    if (hiddenRepos.size === 0) return true;
+    const repo = s.links.map(extractRepoName).find((r): r is string => r !== null);
+    return !repo || !hiddenRepos.has(repo);
+  });
 
   if (stories.length === 0) {
     return <div className="empty-state">ストーリーがありません。新しいストーリーを追加してみましょう。</div>;
@@ -182,26 +246,44 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
 
   return (
     <div className="story-list">
-      {hasLayers && (
-        <div className="story-list-toolbar">
-          <button
-            className="btn-refresh-all"
-            onClick={handleRefreshAllPRs}
-            disabled={refreshingAll}
-          >
-            {refreshingAll ? '↻ 更新中...' : '↻ 全PR情報を更新'}
-          </button>
-        </div>
-      )}
-      {stories.map((story) => {
+      <div className="story-list-toolbar">
+        {repoNames.length > 0 && (
+          <div className="repo-filter-chips">
+            {hiddenRepos.size > 0 && (
+              <button
+                className="repo-filter-clear"
+                onClick={() => setHiddenRepos(new Set())}
+              >
+                すべて表示
+              </button>
+            )}
+            {repoNames.map((repo) => {
+              const hidden = hiddenRepos.has(repo);
+              return (
+                <button
+                  key={repo}
+                  className={`repo-filter-chip ${hidden ? 'hidden' : ''}`}
+                  onClick={() => toggleHiddenRepo(repo)}
+                  title={hidden ? `${repo} を表示する` : `${repo} を非表示にする`}
+                >
+                  {repo}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      {filteredStories.map((story) => {
         const chainLayers = getChainLayers(story.layer_chain);
         const missingLayers = chainLayers.filter(
           (name) => !story.layers.some((l) => l.layer_name === name),
         );
         const isSingleTask = story.layers.length === 0;
+        const isSnoozed = story.snoozed_until ? new Date(story.snoozed_until) > new Date() : false;
+        const snoozeLabel = formatSnoozedUntil(story.snoozed_until);
 
         return (
-          <div key={story.id} className={`story-card ${isSingleTask ? 'story-single-task' : ''}`}>
+          <div key={story.id} className={`story-card ${isSingleTask ? 'story-single-task' : ''} ${isSnoozed ? 'story-snoozed' : ''}`}>
             <div className="story-header">
               <div className="story-info">
                 <span
@@ -216,8 +298,43 @@ export function StoryPipeline({ stories, onRefresh }: Props) {
                 {!isSingleTask && story.layer_chain && (
                   <span className="story-chain-badge">{story.layer_chain}</span>
                 )}
+                {isSnoozed && snoozeLabel && (
+                  <span className="snooze-badge">⏰ {snoozeLabel}</span>
+                )}
               </div>
               <div className="story-actions-top">
+                {isSnoozed ? (
+                  <button
+                    className="btn-icon"
+                    onClick={() => handleUnsnooze(story.id)}
+                    title="スヌーズ解除"
+                  >
+                    ⏰
+                  </button>
+                ) : (
+                  <div className="snooze-menu-wrap">
+                    <button
+                      className="btn-icon"
+                      onClick={() => setSnoozeMenuId(snoozeMenuId === story.id ? null : story.id)}
+                      title="スヌーズ"
+                    >
+                      ⏰
+                    </button>
+                    {snoozeMenuId === story.id && (
+                      <div className="snooze-dropdown">
+                        {SNOOZE_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.value}
+                            className="snooze-option"
+                            onClick={() => handleSnooze(story.id, opt.value)}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <button
                   className="btn-icon"
                   onClick={() => setContextId(contextId === story.id ? null : story.id)}

@@ -51,6 +51,7 @@ type Story struct {
 	Project      string        `json:"project"`
 	Links        []string      `json:"links"`
 	Tags         []string      `json:"tags"`
+	SnoozedUntil *time.Time    `json:"snoozed_until"`
 	LastActiveAt time.Time     `json:"last_active_at"`
 	CreatedAt    time.Time     `json:"created_at"`
 	UpdatedAt    time.Time     `json:"updated_at"`

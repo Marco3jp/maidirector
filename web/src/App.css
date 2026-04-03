@@ -35,11 +35,12 @@ body {
 
 .app-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   padding: 16px 24px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  flex-wrap: wrap;
 }
 
 .app-header h1 {
@@ -1070,4 +1071,118 @@ button:disabled {
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
+}
+
+/* Header actions */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* Snooze */
+.snooze-menu-wrap {
+  position: relative;
+}
+
+.snooze-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 100;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-width: 160px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  overflow: hidden;
+}
+
+.snooze-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.snooze-option:hover {
+  background: var(--surface-hover);
+}
+
+.snooze-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.story-snoozed {
+  opacity: 0.55;
+}
+
+.story-snoozed:hover {
+  opacity: 0.8;
+}
+
+/* Repo filter chips */
+.repo-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.repo-filter-chip {
+  font-size: 12px;
+  padding: 3px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.repo-filter-chip:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.repo-filter-chip.hidden {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: rgba(239, 68, 68, 0.7);
+  text-decoration: line-through;
+}
+
+.repo-filter-chip.hidden:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.repo-filter-clear {
+  font-size: 12px;
+  padding: 3px 10px;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid var(--primary);
+  color: var(--primary);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.repo-filter-clear:hover {
+  background: rgba(99, 102, 241, 0.2);
 }

@@ -11,6 +11,7 @@ export interface Story {
   project: string;
   links: string[];
   tags: string[];
+  snoozed_until: string | null;
   last_active_at: string;
   created_at: string;
   updated_at: string;
@@ -66,6 +67,8 @@ export interface LayerChain {
 export interface ChatRequest {
   message: string;
 }
+
+export type SnoozeDuration = '30m' | '1h' | '3h' | 'tomorrow' | 'next_week';
 
 export interface ScanOrgPRsResult {
   scanned: number;

@@ -55,6 +55,8 @@ func NewServer(cfg *config.Config, storySvc *task.StoryService, ctxMgr *context.
 	mux.HandleFunc("POST /api/stories/{storyId}/layers/{layerId}/refresh-pr", s.handleRefreshLayerPR)
 	mux.HandleFunc("POST /api/stories/refresh-prs", s.handleRefreshAllPRs)
 	mux.HandleFunc("POST /api/stories/scan-org-prs", s.handleScanOrgPRs)
+	mux.HandleFunc("POST /api/stories/{id}/snooze", s.handleSnoozeStory)
+	mux.HandleFunc("POST /api/stories/{id}/unsnooze", s.handleUnsnoozeStory)
 	mux.HandleFunc("POST /api/stories/{id}/context", s.handleAddContext)
 	mux.HandleFunc("GET /api/stories/{id}/context", s.handleListContext)
 	mux.HandleFunc("GET /api/layer-chains", s.handleGetLayerChains)
@@ -498,6 +500,77 @@ func (s *Server) handleScanOrgPRs(w http.ResponseWriter, r *http.Request) {
 		"skipped": skipped,
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// --- Snooze ---
+
+func (s *Server) handleSnoozeStory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req struct {
+		Duration string `json:"duration"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	now := time.Now()
+	var until time.Time
+
+	switch req.Duration {
+	case "30m":
+		until = now.Add(30 * time.Minute)
+	case "1h":
+		until = now.Add(time.Hour)
+	case "3h":
+		until = now.Add(3 * time.Hour)
+	case "tomorrow":
+		tomorrow := now.AddDate(0, 0, 1)
+		until = time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 9, 0, 0, 0, now.Location())
+	case "next_week":
+		daysUntilMonday := (8 - int(now.Weekday())) % 7
+		if daysUntilMonday == 0 {
+			daysUntilMonday = 7
+		}
+		nextMonday := now.AddDate(0, 0, daysUntilMonday)
+		until = time.Date(nextMonday.Year(), nextMonday.Month(), nextMonday.Day(), 9, 0, 0, 0, now.Location())
+	default:
+		writeError(w, http.StatusBadRequest, "invalid duration: use 30m, 1h, 3h, tomorrow, or next_week")
+		return
+	}
+
+	if err := s.storySvc.Snooze(id, until); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	st, err := s.storySvc.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "story not found")
+		return
+	}
+
+	s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: map[string]string{"story_id": id}})
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleUnsnoozeStory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	if err := s.storySvc.Unsnooze(id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	st, err := s.storySvc.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "story not found")
+		return
+	}
+
+	s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: map[string]string{"story_id": id}})
+	writeJSON(w, http.StatusOK, st)
 }
 
 // --- Suggest / Chat handlers ---

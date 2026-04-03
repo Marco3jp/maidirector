@@ -16,7 +16,9 @@ function App() {
   const [activeTab, setActiveTab] = useState<'suggest' | 'chat'>('suggest');
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
+  const [refreshingAll, setRefreshingAll] = useState(false);
   const suppressWsRefreshRef = useRef(false);
+  const snoozeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadStories = useCallback(async () => {
     try {
@@ -30,6 +32,30 @@ function App() {
   useEffect(() => {
     loadStories();
   }, [loadStories]);
+
+  useEffect(() => {
+    if (snoozeTimerRef.current) {
+      clearTimeout(snoozeTimerRef.current);
+      snoozeTimerRef.current = null;
+    }
+
+    const now = Date.now();
+    const futureTimes = stories
+      .map((s) => s.snoozed_until ? new Date(s.snoozed_until).getTime() : null)
+      .filter((t): t is number => t !== null && t > now);
+
+    if (futureTimes.length > 0) {
+      const nearest = Math.min(...futureTimes);
+      const delay = nearest - now + 500;
+      snoozeTimerRef.current = setTimeout(() => {
+        loadStories();
+      }, delay);
+    }
+
+    return () => {
+      if (snoozeTimerRef.current) clearTimeout(snoozeTimerRef.current);
+    };
+  }, [stories, loadStories]);
 
   const handleStoryCreated = useCallback((newStory: Story) => {
     setStories((prev) => {
@@ -59,6 +85,18 @@ function App() {
     }
   }, [loadStories]);
 
+  const handleRefreshAllPRs = useCallback(async () => {
+    setRefreshingAll(true);
+    try {
+      await api.refreshAllPRs();
+      loadStories();
+    } catch (e) {
+      console.error('Failed to refresh all PRs:', e);
+    } finally {
+      setRefreshingAll(false);
+    }
+  }, [loadStories]);
+
   useWebSocket((msg) => {
     if (msg.type === 'story_created' && suppressWsRefreshRef.current) {
       return;
@@ -77,6 +115,22 @@ function App() {
       <header className="app-header">
         <h1>maidirector</h1>
         <span className="app-subtitle">ローカル開発AIアシスタント</span>
+        <div className="header-actions">
+          <button
+            className="btn-scan-org"
+            onClick={handleScanOrgPRs}
+            disabled={scanning}
+          >
+            {scanning ? '🔍 スキャン中...' : '🔍 組織PRスキャン'}
+          </button>
+          <button
+            className="btn-refresh-all"
+            onClick={handleRefreshAllPRs}
+            disabled={refreshingAll}
+          >
+            {refreshingAll ? '↻ 更新中...' : '↻ 全PR情報を更新'}
+          </button>
+        </div>
       </header>
 
       <main className="app-main">
@@ -84,13 +138,6 @@ function App() {
           <div className="panel-header">
             <h2>ストーリー</h2>
             <div className="panel-header-actions">
-              <button
-                className="btn-scan-org"
-                onClick={handleScanOrgPRs}
-                disabled={scanning}
-              >
-                {scanning ? '🔍 スキャン中...' : '🔍 組織PRスキャン'}
-              </button>
               <div className="filter-bar">
                 {(['' , 'active', 'completed', 'archived'] as FilterStatus[]).map((s) => (
                   <button

@@ -5,88 +5,64 @@
 
 ## Status
 
-- **現在のフェーズ**: Phase 2c 実装完了 → Phase 2c'（スヌーズ機能）着手待ち
-- **直近の完了**: Phase 2c（組織内PRスキャン → レビュータスク自動生成）
-- **次にやること**: Phase 2c'（スヌーズ）→ Phase 2c''（リポジトリフィルタ）→ Phase 2c'''（Suggest レビュー待ち改善）→ Phase 2d（チャットからのタスク操作）
+- **現在のフェーズ**: Phase 2c'' 完了 → Phase 2c''' 着手待ち
+- **直近の完了**: Phase 2c'（スヌーズ）+ Phase 2c''（リポジトリ非表示フィルタ + ツールバー整理）
+- **次にやること**: Phase 2c'''（Suggest/Chat のレビュー待ち判定改善）→ Phase 2d（チャットからのタスク操作）
 
 ## Roadmap
 
 ### Phase 1: MVP ✅
 - Go backend + React dashboard + Ollama + SQLite + Qdrant
-- タスク CRUD +「次に何すべき？」提案 + チャット + セマンティック検索
+- ストーリー CRUD +「次に何すべき？」提案 + チャット + セマンティック検索
 
 ### Phase 2: 外部連携 + 構造的依存認識
-- **完了条件**: PR URL を貼れば依存構造を認識し、「次にどのPRを見ればいいか」を自動提案できる
+**完了条件**: PR URL を貼れば依存構造を認識し、「次にどのPRを見ればいいか」を自動提案できる
 
 #### Phase 2a: ストーリー/レイヤーのデータモデル + CRUD ✅
 - `stories` / `story_layers` テーブル + CRUD API + パイプラインビュー + Suggest/Chat プロンプト統合
 
 #### Phase 2b: GitHub 連携（gh コマンド） ✅
 - `internal/github` パッケージ（`gh pr view` ラッパー）
-- PR URL → 情報自動取得・表示、Suggest/Chat 前に一括リフレッシュ、自動ブロッキング判定
-
-#### Phase 2b': GitHub 連携強化 ✅
-- 一括リロードボタン（`POST /api/stories/refresh-prs`）
-- `isDraft`, `statusCheckRollup` 取得 → CI ステータス表示（✓/✗/⏳）
-- PR ラベルを GitHub 準拠（マージ済み:紫 / オープン:緑 / ドラフト:灰 / 未着手:灰）
-- ブロック表現はラベルに影響せず視覚のみ（opacity + dashed border）
-- マージ済みレイヤーのリフレッシュスキップ最適化
+- PR URL → 情報自動取得・表示（isDraft, CI status, reviewDecision）、自動ブロッキング判定
+- 一括リロードボタン（`POST /api/stories/refresh-prs`）、マージ済みレイヤーはリフレッシュスキップ
 
 #### Phase 2.5: Task/Story データモデル統合 ✅
-- Task と Story を統合し、単一のデータモデル（Story）で単タスクも複数レイヤー施策も表現する
-- UI のタスク/ストーリータブを廃止し、統合ビューに一本化
+- Task と Story を統合。単タスク = レイヤー0個の Story として表現
+- Task 系 API・コンポーネント全削除、Story に priority/project/links/tags 追加、UI 統合ビュー一本化
 
 #### Phase 2c: 組織内 PR スキャン → レビュータスク自動生成 ✅
-- `gh search prs --owner <組織名> --state open --sort created --order asc` で組織内のオープン PR を取得（古い順）
-- 初回は直近1週間分を取得、以降は前回実行時刻からの差分のみ（`--updated >=YYYY-MM-DD` で絞り込み、当日分も含む）
-- bot PR の扱いは `bot_policy` で設定: `exclude`（デフォルト: スキップ）または priority 数値（1=最高 〜 5=最低）で取り込み
-- 取得した PR ごとに「レビュー対応」Story（レイヤー0個 = 単タスク）を自動作成
-  - 既に同じ PR URL が紐づいた Story（links JSON）または StoryLayer（pr_url）が存在する場合はスキップ（重複防止）
-  - タイトル: `[Review] リポジトリ名 #123: PRタイトル`、tags: `["review"]`、links: `[PR URL]`
-- 前回実行時刻は SQLite `settings` テーブルに保存
-- UI: 手動実行ボタン（「🔍 組織PRスキャン」）+ 結果バナー通知
-- ストーリーのソート順を `priority ASC, created_at ASC` に変更（同一priority内で古いものが先 = FIFO）
+- `gh search prs --owner` で組織内オープン PR を取得（初回: 直近1週間、以降: 差分のみ）
+- PR ごとに `[Review] リポジトリ名 #N: タイトル` という単タスク Story を自動作成（重複防止あり）
+- `bot_policy`: `exclude`（デフォルト）または priority 数値で bot PR の扱いを制御
 - 設定: `maidirector.yml` の `github.org`, `github.exclude_authors`, `github.bot_policy`
+- ソート順を `priority ASC, created_at ASC` に変更（FIFO）
 
-#### Phase 2c': スヌーズ機能
-- ストーリーカードを一定時間「スヌーズ」し、priority に関係なくリストの一番下に表示する
-- `stories` テーブルに `snoozed_until DATETIME` カラム追加
-- ソート順: `CASE WHEN snoozed_until > CURRENT_TIMESTAMP THEN 1 ELSE 0 END ASC, priority ASC, created_at ASC`
-- スヌーズ期間の選択肢:
-  - 30分 / 1時間 / 3時間 / 明日まで（翌日 09:00）/ 来週まで（次の月曜 09:00）
-- API:
-  - `POST /api/stories/{id}/snooze` — body: `{ "duration": "30m" | "1h" | "3h" | "tomorrow" | "next_week" }`
-  - `POST /api/stories/{id}/unsnooze` — スヌーズ解除
-- UI:
-  - カードに ⏰ ボタン → クリックで期間選択ドロップダウン
-  - スヌーズ中のカードは視覚的に区別（opacity 低下 + 残り時間バッジ表示）
-  - スヌーズ解除ボタン
-- スヌーズ期限切れ時はソート位置が自動的に元に戻る（クエリ時に判定するだけで cron 不要）
-- クライアント側で最も近い `snoozed_until` に setTimeout を設定し、期限到達時にリストを再取得（画面開きっぱなしでも反映される）
+#### Phase 2c': スヌーズ機能 ✅
+- `stories.snoozed_until DATETIME` カラム追加。スヌーズ中はリスト末尾に表示
+- 期間選択: 30分 / 1時間 / 3時間 / 明日まで（翌日 09:00）/ 来週まで（次の月曜 09:00）
+- API: `POST /api/stories/{id}/snooze`（body: `{ "duration": "30m"|"1h"|"3h"|"tomorrow"|"next_week" }`）、`POST /api/stories/{id}/unsnooze`
+- UI: ⏰ ボタン → ドロップダウン選択、スヌーズ中は opacity 低下 + 残り時間バッジ
+- 期限切れ時は cron 不要でクエリ時に自動復帰。クライアント側 setTimeout でスムーズに再取得
 
-#### Phase 2c'': リポジトリフィルタ + ツールバー整理
-- レビュータスク（単タスク）をリポジトリ名で絞り込めるフィルタを追加
-- レイヤーチェーン付きのストーリーはフィルタ対象外（常に表示）
-- UI レイアウト変更:
-  - ヘッダー横: 「🔍 組織PRスキャン」ボタン + 「↻ 全PR情報を更新」ボタン（現在のリスト内ツールバーから移動）
-  - 現在の「↻ 全PR情報を更新」があった位置 → リポジトリフィルタ（ドロップダウン or チップ選択）
-- フィルタのリポジトリ一覧は表示中のストーリーの links から動的に抽出（API 不要）
-- フィルタ状態はクライアント側のみ（URL パラメータ or ローカルステートで管理、DB 保存不要）
+#### Phase 2c'': リポジトリ非表示フィルタ + ツールバー整理 ✅
+- ヘッダーに「🔍 組織PRスキャン」「↻ 全PR情報を更新」ボタンを並置
+- リストのツールバーをリポジトリ非表示チップに刷新
+  - 単タスクの `links` から GitHub リポジトリ名を動的抽出してチップ生成（API 不要）
+  - クリックで非表示トグル（複数同時可）。非表示チップは 🚫 + 打ち消し線 + 赤みで表示
+  - 「すべて表示」ボタンで一括解除。レイヤーチェーン付きストーリーはフィルタ対象外
+  - 状態はクライアントローカルステートのみ（`hiddenRepos: Set<string>`、DB 保存なし）
 
 #### Phase 2c''': Suggest/Chat のレビュー待ち判定改善
-- 他者レビュー待ち（自分では対処不能）の PR を「次にやるべき」から除外する
+- 他者レビュー待ちの PR を「次にやるべき」から除外する
 - 除外条件: PR が review 状態 かつ 自分がアクション不要（未読コメントなし）
-- 例外（提案に含めるケース）:
-  - 未読コメントがある（= 自分の対応が必要）
-  - 前日以降放置されている → 「レビュー依頼を改めて出しましょう」とアドバイス
+- 例外（提案に含める）: 未読コメントあり、または前日以降放置（再依頼アドバイス）
 - 実装方針:
   - `context/manager.go` の `formatStories` / Suggest プロンプトでレビュー待ち状態を分類
   - PR の `reviewDecision` + 最終更新日時で「アクション可能かどうか」を判定
-  - プロンプトの判断基準リストを更新（レビュー待ち = 基本スキップ、長期放置時のみ再依頼提案）
 
 #### Phase 2d: チャットからのタスク操作
-- Ollama の tool use（function calling）サポート状況を検証
-- サポートが安定していれば: LLM tool use で Story CRUD を会話から実行（統合後は操作対象が1系統）
+- Ollama tool use（function calling）サポート状況を検証
+- 安定していれば: LLM tool use で Story CRUD を会話から実行
 - フォールバック案: スラッシュコマンド方式（`/create タスク名`）をフロントエンド側でパース
 
 #### Phase 2 後回し（必要に応じて）
@@ -94,8 +70,7 @@
 - ローリングサマリーの自動化
 
 ### Phase 3: 音声 + 高度な機能
-- 音声入力 (Chrome SpeechRecognition API)
-- 音声出力 (Web Speech Synthesis API)
+- 音声入力 (Chrome SpeechRecognition API)、音声出力 (Web Speech Synthesis API)
 - LLM アップグレード (OpenAI/Anthropic API 切替オプション)
 - サブエージェントによるタスク状況の自動調査
 
@@ -105,132 +80,124 @@
 
 ## Architecture Decisions
 
-- 2026-04-02: バックエンドに Go を採用。cmd/ + internal/ パターン、単一バイナリ配布の利点。
-- 2026-04-02: フロントエンドに React + Vite SPA を採用。将来の音声統合に有利、Go embed.FS でバイナリに同梱。
-- 2026-04-02: Chat LLM に Ollama (qwen2.5:14b) を採用。ローカル無料、日本語に強い14Bモデル。Provider インターフェース抽象化で後から差替可能。動作確認は qwen2.5:7b で実施済み。
-- 2026-04-02: Embedding に Ollama (nomic-embed-text, 768次元) を採用。Ollama の /api/embed エンドポイントで統一。
-- 2026-04-02: タスク管理の正規ストアに SQLite (modernc.org/sqlite, CGO不要) を採用。
-- 2026-04-02: セマンティック検索用の記憶層に既存 Qdrant Docker インスタンス (localhost:6333) を流用。コレクション名は `maidirector`。Qdrant Go client (gRPC依存) ではなく REST API を直接叩く実装を採用。
-- 2026-04-02: プロジェクト名を maidirector に決定。メイドラゴンリスペクト。
-- 2026-04-02: GitHub 連携に gh CLI コマンドを採用。OAuth トークン管理不要、プライベートリポジトリにアクセス可能。PR 状態取得はポーリングではなくイベント駆動（Suggest 押下時・PR URL 貼付時・チャット質問時に都度取得）。
+- バックエンドに Go を採用。cmd/ + internal/ パターン、単一バイナリ配布。
+- フロントエンドに React + Vite SPA を採用。Go embed.FS でバイナリに同梱。
+- Chat LLM に Ollama (qwen2.5:14b) を採用。ローカル無料、日本語に強い。Provider インターフェース抽象化で差替可能。動作確認は qwen2.5:7b で実施。
+- Embedding に Ollama (nomic-embed-text, 768次元) を採用。
+- SQLite (modernc.org/sqlite, CGO不要) をタスク管理の正規ストアに採用。
+- Qdrant (localhost:6333, REST API 直叩き) をセマンティック検索の記憶層に採用。コレクション名は `maidirector`。
+- GitHub 連携に gh CLI を採用。OAuth トークン管理不要、プライベートリポジトリにアクセス可能。PR 状態取得はイベント駆動（Suggest 押下時・PR URL 貼付時・チャット質問時・手動更新時）。
 
 ## Tech Stack
 
-| 要素 | 選定 | 役割 |
-|------|------|------|
-| Backend | Go + Cobra CLI + net/http | API サーバー、単一バイナリ (go 1.26) |
-| Frontend | React + Vite + TypeScript | ダッシュボード SPA |
-| Chat LLM | Ollama / qwen2.5:14b (7b で検証済み) | 提案・チャットの推論 |
-| Embedding | Ollama / nomic-embed-text | テキスト → 768次元ベクトル変換 |
-| DB | SQLite (modernc.org/sqlite) | タスク・ストーリー・会話・サマリーの CRUD (正規ストア) |
-| セマンティック検索 | Qdrant v1.17.0 (既存Docker) | 過去の文脈をベクトル検索で引き出す記憶層 |
-| GitHub 連携 | gh CLI (os/exec経由) | PR状態取得・組織PRスキャン |
-| Config | YAML (gopkg.in/yaml.v3) | 設定ファイル |
+| 要素 | 選定 |
+|------|------|
+| Backend | Go + Cobra CLI + net/http (go 1.26) |
+| Frontend | React 19 + Vite + TypeScript |
+| Chat LLM | Ollama / qwen2.5:14b (7b で検証済み) |
+| Embedding | Ollama / nomic-embed-text (768次元) |
+| DB | SQLite (modernc.org/sqlite) |
+| Vector | Qdrant v1.17.0 (既存 Docker, REST API) |
+| GitHub 連携 | gh CLI (os/exec 経由) |
+| Config | YAML (gopkg.in/yaml.v3) |
 
-## Feature Design: レイヤー依存グラフ
+## Data Model
 
-### 課題
+```
+stories テーブル
+  - id, title, description, layer_chain, status (active/completed/archived)
+  - priority (0=なし, 1=P1最高 〜 5=P5最低), project, links (JSON), tags (JSON)
+  - snoozed_until DATETIME (NULL=スヌーズなし)
+  - last_active_at, created_at, updated_at
+  - ソート: CASE WHEN snoozed_until > CURRENT_TIMESTAMP THEN 1 ELSE 0 END ASC, priority ASC, created_at ASC
 
-施策（ストーリー）の開発は proto → microservice/gateway → backend → frontend のようにレイヤーごとに構造的なブロッキング関係がある。これが複数のストーリーで並行して進行するため、「今どのストーリーのどのレイヤーまで進んでいるか」「次にどのPRを見ればいいか」の把握が困難になる。
+story_layers テーブル
+  - id, story_id, layer_name, status (pending/in_progress/review/merged)
+  - pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft (INTEGER), pr_check_status
+  - sort_order (ブロック判定に使用。直前レイヤーが merged でなければブロック中)
+  - created_at, updated_at
+  - FOREIGN KEY (story_id) → stories(id) ON DELETE CASCADE
 
-### 設計の方向性
+settings テーブル
+  - key (PRIMARY KEY), value, updated_at
+  - 現在の利用: last_org_pr_scan_time（差分スキャン用の前回実行時刻）
+
+context_entries テーブル
+  - id, story_id, content, entry_type (note/progress/blocker), created_at
+
+conversations / summaries テーブル (LLM チャット履歴・サマリー)
+```
+
+### レイヤー依存グラフ（設計イメージ）
 
 ```
 ストーリーA ─┬─ proto (PR #101)          ← マージ済み
              ├─ microservice (PR #102)   ← レビュー中 ← 次にやるべき
              ├─ gateway (PR #103)        ← ブロック中（microservice待ち）
              └─ frontend (PR #104)       ← ブロック中（gateway待ち）
-
-ストーリーB ─┬─ proto (PR #201)          ← レビュー中 ← 次にやるべき
-             ├─ microservice (PR #202)   ← 未着手
-             └─ frontend (PR #203)       ← 未着手
 ```
 
-レイヤーの依存順序は設定ファイルで定義:
-```yaml
-layer_chains:
-  - name: default
-    layers: [proto, microservice, gateway, frontend]
-  - name: simple
-    layers: [backend, frontend]
-```
+`layer_chains` は `maidirector.yml` で定義。ブロック判定は `sort_order` を使い表示時に計算。
 
-### データモデル（実装済み）
-
-```
-stories テーブル
-  - id, title, description, layer_chain, status (active/completed/archived)
-  - priority (0=なし, 1=P1最高 〜 5=P5最低), project, links (JSON), tags (JSON)
-  - last_active_at, created_at, updated_at
-  - ソート順: priority ASC, created_at ASC
-
-story_layers テーブル
-  - id, story_id, layer_name, status (pending/in_progress/review/merged)
-  - pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft (INTEGER), pr_check_status
-  - sort_order (レイヤーチェーン内の順序、ブロック判定に使用)
-  - created_at, updated_at
-  - FOREIGN KEY (story_id) → stories(id) ON DELETE CASCADE
-
-settings テーブル
-  - key (PRIMARY KEY), value, updated_at
-```
-
-ブロック判定は `sort_order` を使い表示時に計算。直前のレイヤーが merged でなければブロック中と判定する。
-
-### GitHub PR 取得タイミング（イベント駆動）
-
-- 「提案してもらう」ボタン押下時 → Suggest 前に全紐付き PR をリフレッシュ（マージ済みスキップ）
-- PR URL をストーリーレイヤーに貼り付けた時 → その場で取得・表示
-- チャット質問時 → 回答前にリフレッシュ
-- 「↻ 全PR情報を更新」ボタン押下時 → 一括リフレッシュ
+### GitHub PR 取得
 
 ```bash
 gh pr view <url> --json number,title,state,isDraft,mergeable,reviewDecision,url,statusCheckRollup
 ```
 
-### Suggest/Chat プロンプト統合（実装済み）
+イベント駆動: Suggest 押下時 / PR URL 貼付時 / Chat 質問時 / 「↻ 全PR情報を更新」押下時
 
-- アクティブなストーリーのパイプライン状況（ステータス + ブロック判定 + PR state/isDraft/reviewDecision/CI status）をプロンプトに注入
-- 判断基準: ブロッカー解消 > 上流マージ済み下流未着手 > PR APPROVED未マージ > CHANGES_REQUESTED修正 > CI FAILURE修正 > CI PENDING待ち > 進行中完了 > 高優先度 > 長時間放置
+### Suggest/Chat プロンプト（優先度判断基準）
+
+ブロッカー解消 > 上流マージ済み下流未着手 > PR APPROVED未マージ > CHANGES_REQUESTED修正 >
+CI FAILURE修正 > CI PENDING待ち > 進行中完了 > 高優先度 > 長時間放置
 
 ## Known Issues / TODO
 
-### Phase 2d で対応予定
-- チャットからのタスク操作（Ollama tool use）
-
-### 将来の検討事項
-- Chrome SpeechRecognition API のブラウザ制限 (Phase 3)
-- 全レイヤー完了時にストーリーを自動完了扱い
+- Phase 2c''': Suggest/Chat でレビュー待ち PR を「次にやるべき」から除外する判定が未実装
+- Phase 2d: チャットからのタスク操作（Ollama tool use）が未実装
+- 全レイヤー完了時にストーリーを自動完了扱いにする機能が未実装
+- Chrome SpeechRecognition API のブラウザ制限（Phase 3 以降の課題）
 
 ## Session Log
 
-### 2026-04-02: Phase 1 MVP 実装
+### 2026-04-02: Phase 1 MVP
 - 要件定義・技術選定・アーキテクチャ設計・ロードマップ策定
 - Go backend + React frontend フルスタック実装、embed.FS で単一バイナリ化 (16MB)
-- 動作確認完了（qwen2.5:7b でタスクCRUD・提案・チャット・ベクトル化・削除すべて疎通）
+- 動作確認: qwen2.5:7b でタスクCRUD・提案・チャット・ベクトル化・削除すべて疎通
 
-### 2026-04-02: Phase 2a - ストーリー/レイヤー + パイプラインビュー
+### 2026-04-02: Phase 2a – ストーリー/レイヤー + パイプラインビュー
 - stories/story_layers CRUD + パイプラインビュー + Suggest/Chat プロンプト統合
-- 動作確認完了（API + ブラウザ UI: パイプライン表示、ブロック判定、WebSocket リアルタイム更新）
+- 動作確認: API + ブラウザ UI（パイプライン表示、ブロック判定、WebSocket リアルタイム更新）
 
-### 2026-04-02: Phase 2b/2b' - GitHub 連携
+### 2026-04-02: Phase 2b/2b' – GitHub 連携
 - `internal/github` パッケージ（`gh pr view` ラッパー）、PR URL → 情報自動取得・表示
-- isDraft / statusCheckRollup / CI ステータス表示、PR ラベル GitHub 準拠化、一括リフレッシュ
-- 動作確認完了（gh 認証、PR 情報取得・保存、ブラウザ UI 表示）
+- isDraft / CI ステータス / PR ラベル GitHub 準拠化、一括リフレッシュ
+- 動作確認: gh 認証、PR 情報取得・保存、ブラウザ UI 表示
 
 ### 2026-04-02: 開発環境スクリプト + AGENTS.md
 - `dev.sh`（全依存サービスべき等一括起動）、`AGENTS.md`（動作確認の判断基準を明文化）
 
-### 2026-04-02: Phase 2.5 - Task/Story データモデル統合
-- Task と Story を統合。単タスク = レイヤー0個の Story として表現
-- Task 系 API・コンポーネント全削除、Story に priority/project/links/tags 追加、UI 統合ビュー一本化
-- 動作確認完了（API: Story CRUD + Context + フィルタ、ブラウザ UI: 統合ビュー・単タスク・ステータス変更・削除）
+### 2026-04-02: Phase 2.5 – Task/Story データモデル統合
+- Task と Story を統合。Task 系 API・コンポーネント全削除、Story に priority/project/links/tags 追加
+- 動作確認: Story CRUD + Context + フィルタ、統合 UI での単タスク・ステータス変更・削除
 - バグ修正: links が null 返却 → CreateStory で nil → `[]` デフォルト
 
-### 2026-04-02: Phase 2c - 組織内PRスキャン → レビュータスク自動生成
-- `SearchOrgPRs`（`gh search prs --owner`）、`FindStoryByPRURL`（重複防止）、`settings` テーブル（差分スキャン）
-- `POST /api/stories/scan-org-prs` エンドポイント、UI に「🔍 組織PRスキャン」ボタン
-- ソート順を `priority ASC, created_at ASC` に変更（FIFO）
-- `bot_policy` 設定: exclude（デフォルト）または priority 数値で bot PR の扱いを切替
-- `maidirector.yml` に `github` セクション追加（`org`, `exclude_authors`, `bot_policy`）
-- 動作確認完了（54件スキャン → 41件作成・13件bot スキップ、再スキャン時の重複防止・差分スキャン、ブラウザ UI 表示）
+### 2026-04-02: Phase 2c – 組織内PRスキャン → レビュータスク自動生成
+- `SearchOrgPRs`、`FindStoryByPRURL`（重複防止）、`settings` テーブル（差分スキャン用）
+- `POST /api/stories/scan-org-prs`、`bot_policy` 設定、`maidirector.yml` に `github` セクション追加
+- 動作確認: 54件スキャン → 41件作成・13件 bot スキップ、再スキャン時の重複防止・差分スキャン
+
+### 2026-04-03: Phase 2c' – スヌーズ機能
+- `stories.snoozed_until` カラム追加（migration）、ソート変更
+- `SnoozeStory` / `UnsnoozeStory` ストアメソッド追加（`internal/store/store.go`）
+- `POST /api/stories/{id}/snooze` / `POST /api/stories/{id}/unsnooze` エンドポイント追加
+- フロントエンド: ⏰ ボタン + ドロップダウン + 残り時間バッジ + クライアント側 setTimeout
+- 動作確認: スヌーズ適用 → リスト最下部移動 + 「29分後に復帰」バッジ表示
+
+### 2026-04-03: Phase 2c'' – リポジトリ非表示フィルタ + ツールバー整理
+- ヘッダーに「🔍 組織PRスキャン」「↻ 全PR情報を更新」を並置（`App.tsx` の `header-actions`）
+- `StoryPipeline.tsx` のツールバーをリポジトリ非表示チップに変更
+  - `hiddenRepos: Set<string>` で複数リポジトリを同時非表示可能
+  - 非表示チップ: 🚫 + 打ち消し線 + 赤みのスタイル、「すべて表示」ボタンで一括解除
+- 動作確認: 23リポジトリのチップ表示、複数リポジトリの同時非表示・解除

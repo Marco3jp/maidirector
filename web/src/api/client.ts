@@ -1,4 +1,4 @@
-import type { ContextEntry, Story, CreateStoryRequest, StoryLayer, CreateLayerRequest, LayerChain, ScanOrgPRsResult } from './types';
+import type { ContextEntry, Story, CreateStoryRequest, StoryLayer, CreateLayerRequest, LayerChain, ScanOrgPRsResult, SnoozeDuration } from './types';
 
 const BASE = '/api';
 
@@ -61,6 +61,14 @@ export const api = {
 
   scanOrgPRs(): Promise<ScanOrgPRsResult> {
     return request('/stories/scan-org-prs', { method: 'POST' });
+  },
+
+  snoozeStory(id: string, duration: SnoozeDuration): Promise<Story> {
+    return request(`/stories/${id}/snooze`, { method: 'POST', body: JSON.stringify({ duration }) });
+  },
+
+  unsnoozeStory(id: string): Promise<Story> {
+    return request(`/stories/${id}/unsnooze`, { method: 'POST' });
   },
 
   addContext(storyId: string, content: string, entryType: string): Promise<ContextEntry> {
