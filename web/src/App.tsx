@@ -114,27 +114,6 @@ function App() {
 
   return (
     <div className="app">
-      <header className="app-header">
-        <h1>maidirector</h1>
-        <span className="app-subtitle">ローカル開発AIアシスタント</span>
-        <div className="header-actions">
-          <button
-            className="btn-scan-org"
-            onClick={handleScanOrgPRs}
-            disabled={scanning}
-          >
-            {scanning ? '🔍 スキャン中...' : '🔍 組織PRスキャン'}
-          </button>
-          <button
-            className="btn-refresh-all"
-            onClick={handleRefreshAllPRs}
-            disabled={refreshingAll}
-          >
-            {refreshingAll ? '↻ 更新中...' : '↻ 全PR情報を更新'}
-          </button>
-        </div>
-      </header>
-
       <main className="app-main">
         <section className="panel panel-tasks">
           <div className="panel-header">
@@ -163,6 +142,21 @@ function App() {
                   title="すべて展開"
                 >
                   一括▼
+                </button>
+                <span className="filter-bar-divider" />
+                <button
+                  className="filter-btn"
+                  onClick={handleScanOrgPRs}
+                  disabled={scanning}
+                >
+                  {scanning ? '🔍 スキャン中...' : '🔍 組織PRスキャン'}
+                </button>
+                <button
+                  className="filter-btn"
+                  onClick={handleRefreshAllPRs}
+                  disabled={refreshingAll}
+                >
+                  {refreshingAll ? '↻ 更新中...' : '↻ 全PR情報を更新'}
                 </button>
               </div>
             </div>

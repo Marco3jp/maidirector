@@ -3,7 +3,7 @@ server:
 
 llm:
   provider: ollama
-  chat_model: qwen2.5:7b
+  chat_model: qwen2.5:14b
   embedding_model: nomic-embed-text
   endpoint: http://localhost:11434
 

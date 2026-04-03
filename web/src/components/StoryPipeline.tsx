@@ -106,12 +106,35 @@ interface Props {
   expandSignal?: number;
 }
 
+const URL_RE = /https?:\/\/[^\s]+/g;
+
+function renderDescription(text: string) {
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  let match: RegExpExecArray | null;
+  URL_RE.lastIndex = 0;
+  while ((match = URL_RE.exec(text)) !== null) {
+    if (match.index > last) parts.push(text.slice(last, match.index));
+    const url = match[0];
+    parts.push(
+      <a key={match.index} href={url} target="_blank" rel="noopener noreferrer" className="description-link">
+        {url}
+      </a>
+    );
+    last = match.index + url.length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
 export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal }: Props) {
   const [chains, setChains] = useState<LayerChain[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [contextId, setContextId] = useState<string | null>(null);
   const [snoozeMenuId, setSnoozeMenuId] = useState<string | null>(null);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const [editingDescriptionId, setEditingDescriptionId] = useState<string | null>(null);
+  const [descriptionDraft, setDescriptionDraft] = useState('');
   const [hiddenRepos, setHiddenRepos] = useState<Set<string>>(() => {
     try {
       const saved = localStorage.getItem('maidirector:hiddenRepos');
@@ -142,7 +165,6 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
   useEffect(() => {
     if (expandSignal === undefined) return;
     setCollapsedIds(new Set());
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandSignal]);
 
   const handleDelete = async (id: string) => {
@@ -170,6 +192,15 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
       onRefresh();
     } catch (e) {
       console.error('Failed to update story priority:', e);
+    }
+  };
+
+  const handleDescriptionSave = async (story: Story, newDesc: string) => {
+    try {
+      await api.updateStory(story.id, { ...story, description: newDesc });
+      onRefresh();
+    } catch (e) {
+      console.error('Failed to update description:', e);
     }
   };
 
@@ -465,8 +496,45 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
               </div>
             </div>
 
-            {story.description && (
-              <p className="story-description">{story.description}</p>
+            {editingDescriptionId === story.id ? (
+              <div className="description-edit">
+                <textarea
+                  className="description-textarea"
+                  value={descriptionDraft}
+                  onChange={(e) => setDescriptionDraft(e.target.value)}
+                  rows={3}
+                  autoFocus
+                  placeholder="説明（URLはリンクになります）"
+                />
+                <div className="description-edit-actions">
+                  <button
+                    className="btn-sm btn-primary"
+                    onClick={async () => {
+                      await handleDescriptionSave(story, descriptionDraft);
+                      setEditingDescriptionId(null);
+                    }}
+                  >
+                    保存
+                  </button>
+                  <button
+                    className="btn-sm"
+                    onClick={() => setEditingDescriptionId(null)}
+                  >
+                    キャンセル
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div
+                className={`story-description-wrap ${!story.description ? 'story-description-empty' : ''}`}
+                onClick={() => { setEditingDescriptionId(story.id); setDescriptionDraft(story.description); }}
+                title="クリックして編集"
+              >
+                {story.description
+                  ? <p className="story-description">{renderDescription(story.description)}</p>
+                  : <span className="story-description-placeholder">説明を追加...</span>
+                }
+              </div>
             )}
 
             {story.tags.length > 0 && (
@@ -479,11 +547,32 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
 
             {story.links.length > 0 && (
               <div className="task-links">
-                {story.links.map((link, i) => (
-                  <a key={i} href={link} target="_blank" rel="noopener noreferrer" className="task-link">
-                    {(() => { try { return new URL(link).hostname; } catch { return link; } })()}
-                  </a>
-                ))}
+                {story.links.map((link, i) => {
+                  let label: string;
+                  try {
+                    const u = new URL(link);
+                    const parts = u.pathname.split('/').filter(Boolean);
+                    if (u.hostname === 'github.com' && parts.length >= 4 && parts[2] === 'pull') {
+                      label = `${parts[1]} #${parts[3]}`;
+                    } else {
+                      label = u.hostname;
+                    }
+                  } catch {
+                    label = link;
+                  }
+                  const isPR = label.includes('#');
+                  return (
+                    <a
+                      key={i}
+                      href={link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={isPR && isSingleTask ? 'task-link task-link-pr' : 'task-link'}
+                    >
+                      {isPR && isSingleTask ? `🔗 ${label}` : label}
+                    </a>
+                  );
+                })}
               </div>
             )}
 

@@ -101,9 +101,11 @@ fi
 
 INSTALLED_MODELS=$(curl -sf http://localhost:11434/api/tags | python3 -c "import sys,json; [print(m['name'].split(':')[0]+':'+m['name'].split(':')[1] if ':' in m['name'] else m['name']) for m in json.load(sys.stdin).get('models',[])]" 2>/dev/null)
 
-for model in "qwen2.5:7b" "nomic-embed-text"; do
-  model_base="${model%%:*}"
-  if echo "$INSTALLED_MODELS" | grep -q "$model_base"; then
+CHAT_MODEL=$(awk '/chat_model:/{print $2}' "$SCRIPT_DIR/maidirector.yml")
+EMBED_MODEL=$(awk '/embedding_model:/{print $2}' "$SCRIPT_DIR/maidirector.yml")
+
+for model in "$CHAT_MODEL" "$EMBED_MODEL"; do
+  if echo "$INSTALLED_MODELS" | grep -qx "$model"; then
     skip "モデル $model はインストール済み"
   else
     echo -e "  モデル $model をダウンロード中 (初回のみ、時間がかかります)..."
