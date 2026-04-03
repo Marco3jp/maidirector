@@ -257,7 +257,10 @@ func formatStories(stories []*task.Story) string {
 			b.WriteString(fmt.Sprintf("  tags: %s\n", strings.Join(s.Tags, ", ")))
 		}
 		if len(s.Tasks) == 0 {
-			b.WriteString("  タスク: なし（単タスク）\n")
+			if len(s.Links) > 0 {
+				b.WriteString(fmt.Sprintf("  リンク: %s\n", strings.Join(s.Links, ", ")))
+			}
+			b.WriteString("  タスク: なし（単タスク・上流/下流依存なし）\n")
 			continue
 		}
 		taskByID := map[string]*task.StoryTask{}
@@ -266,11 +269,20 @@ func formatStories(stories []*task.Story) string {
 		}
 		for i, t := range s.Tasks {
 			blocked := ""
-			for _, depID := range t.DependsOn {
-				if dep, ok := taskByID[depID]; ok && dep.Status != task.TaskStatusMerged {
-					blocked = " [ブロック中]"
-					break
+			var depsInfo string
+			if len(t.DependsOn) == 0 {
+				depsInfo = " [依存なし・独立タスク]"
+			} else {
+				depNames := []string{}
+				for _, depID := range t.DependsOn {
+					if dep, ok := taskByID[depID]; ok {
+						depNames = append(depNames, fmt.Sprintf("%s(%s)", dep.Name, dep.Status))
+						if dep.Status != task.TaskStatusMerged {
+							blocked = " [ブロック中]"
+						}
+					}
 				}
+				depsInfo = fmt.Sprintf(" [上流: %s]", strings.Join(depNames, ", "))
 			}
 			prInfo := ""
 			if t.PRUrl != "" {
@@ -292,7 +304,7 @@ func formatStories(stories []*task.Story) string {
 				}
 				prInfo = fmt.Sprintf(" (PR: %s)", strings.Join(prParts, ", "))
 			}
-			b.WriteString(fmt.Sprintf("  %d. %s: %s%s%s\n", i+1, t.Name, t.Status, blocked, prInfo))
+			b.WriteString(fmt.Sprintf("  %d. %s: %s%s%s%s\n", i+1, t.Name, t.Status, blocked, depsInfo, prInfo))
 		}
 	}
 	return b.String()
@@ -305,7 +317,7 @@ func buildSuggestSystemPrompt(storySummary, relatedContext, globalSummary string
 
 ## 判断基準
 1. ブロッカーの解消が最優先
-2. ストーリーのパイプラインで上流PRがマージ済みなのに下流が未着手の場合、着手を提案
+2. ストーリーのパイプラインで「上流」タスク（depends_on で定義された同一ストーリー内の依存先タスク）のPRがマージ済みなのに、下流タスクが未着手の場合、着手を提案。「依存なし・独立タスク」と表示されているタスクには上流は存在しないため、この基準を適用しないこと
 3. PRのレビューステータスがAPPROVEDで未マージの場合、マージを促す
 4. PRがCHANGES_REQUESTEDの場合、修正対応を促す
 5. PRのCIステータスがFAILUREの場合、CI修正を促す
