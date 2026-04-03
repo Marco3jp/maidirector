@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Story, StoryStatus, LayerChain, TaskStatus, StoryTask, SnoozeDuration } from '../api/types';
+import type { Story, StoryStatus, LayerChain, TaskStatus, StoryTask, SnoozeDuration, ContextEntry } from '../api/types';
 import { api } from '../api/client';
 
 const SNOOZE_OPTIONS: { label: string; value: SnoozeDuration }[] = [
@@ -135,6 +135,7 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [editingDescriptionId, setEditingDescriptionId] = useState<string | null>(null);
   const [descriptionDraft, setDescriptionDraft] = useState('');
+  const [contextEntriesMap, setContextEntriesMap] = useState<Record<string, ContextEntry[]>>({});
   const [hiddenRepos, setHiddenRepos] = useState<Set<string>>(() => {
     try {
       const saved = localStorage.getItem('maidirector:hiddenRepos');
@@ -201,6 +202,49 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
       onRefresh();
     } catch (e) {
       console.error('Failed to update description:', e);
+    }
+  };
+
+  const fetchContextEntries = async (storyId: string) => {
+    try {
+      const entries = await api.listContext(storyId);
+      setContextEntriesMap((prev) => ({ ...prev, [storyId]: entries }));
+    } catch (e) {
+      console.error('Failed to fetch context entries:', e);
+    }
+  };
+
+  useEffect(() => {
+    stories.forEach((story) => fetchContextEntries(story.id));
+  // stories の変化だけを監視する意図的な依存リスト
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stories]);
+
+  const handleContextPanelToggle = (storyId: string) => {
+    setContextId((prev) => (prev === storyId ? null : storyId));
+  };
+
+  const handleDeleteContextEntry = async (storyId: string, entryId: string) => {
+    try {
+      await api.deleteContext(storyId, entryId);
+      setContextEntriesMap((prev) => ({
+        ...prev,
+        [storyId]: (prev[storyId] || []).filter((e) => e.id !== entryId),
+      }));
+    } catch (e) {
+      console.error('Failed to delete context entry:', e);
+    }
+  };
+
+  const handleUpdateContextEntry = async (storyId: string, entryId: string, content: string, entryType: string) => {
+    try {
+      const updated = await api.updateContext(storyId, entryId, content, entryType);
+      setContextEntriesMap((prev) => ({
+        ...prev,
+        [storyId]: (prev[storyId] || []).map((e) => (e.id === entryId ? updated : e)),
+      }));
+    } catch (e) {
+      console.error('Failed to update context entry:', e);
     }
   };
 
@@ -307,9 +351,10 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
     });
   };
 
-  const singleTaskStories = stories.filter((s) => s.tasks.length === 0);
   const repoNames = [...new Set(
-    singleTaskStories.flatMap((s) => s.links.map(extractRepoName).filter((r): r is string => r !== null))
+    stories.flatMap((s) =>
+      s.tasks.map((t) => extractRepoName(t.pr_url)).filter((r): r is string => r !== null)
+    )
   )].sort();
 
   const toggleHiddenRepo = (repo: string) => {
@@ -326,10 +371,10 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
   };
 
   const filteredStories = stories.filter((s) => {
-    if (s.tasks.length > 0) return true;
     if (hiddenRepos.size === 0) return true;
-    const repo = s.links.map(extractRepoName).find((r): r is string => r !== null);
-    return !repo || !hiddenRepos.has(repo);
+    const taskRepos = s.tasks.map((t) => extractRepoName(t.pr_url)).filter((r): r is string => r !== null);
+    if (taskRepos.length === 0) return true;
+    return taskRepos.some((r) => !hiddenRepos.has(r));
   });
 
   if (stories.length === 0) {
@@ -389,24 +434,22 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
                   {STORY_STATUS_LABELS[story.status]}
                 </span>
                 <span className="story-title story-collapsed-title">{story.title}</span>
-                {story.tasks.map((t) => (
-                  <span key={t.id} className="story-collapsed-task">
-                    {t.pr_url ? (
-                      <a href={t.pr_url} target="_blank" rel="noopener noreferrer" className="story-collapsed-task-link">
-                        {t.name}
-                      </a>
-                    ) : (
-                      t.name
-                    )}
-                  </span>
-                ))}
-                {story.tasks.length === 0 && story.links.map((link, i) => (
-                  <span key={i} className="story-collapsed-task">
-                    <a href={link} target="_blank" rel="noopener noreferrer" className="story-collapsed-task-link">
-                      link
-                    </a>
-                  </span>
-                ))}
+                {story.tasks.map((t) => {
+                  const repoLabel = t.pr_url ? extractRepoName(t.pr_url) : null;
+                  const prNum = t.pr_number || null;
+                  const chipLabel = repoLabel && prNum ? `${repoLabel} #${prNum}` : t.name;
+                  return (
+                    <span key={t.id} className="story-collapsed-task">
+                      {t.pr_url ? (
+                        <a href={t.pr_url} target="_blank" rel="noopener noreferrer" className="story-collapsed-task-link">
+                          {chipLabel}
+                        </a>
+                      ) : (
+                        t.name
+                      )}
+                    </span>
+                  );
+                })}
                 <button
                   className="btn-icon story-collapsed-expand"
                   onClick={() => setCollapsedIds((prev) => { const next = new Set(prev); next.delete(story.id); return next; })}
@@ -474,8 +517,8 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
                 )}
                 <button
                   className="btn-icon"
-                  onClick={() => setContextId(contextId === story.id ? null : story.id)}
-                  title="メモ追加"
+                  onClick={() => handleContextPanelToggle(story.id)}
+                  title="メモ"
                 >
                   📝
                 </button>
@@ -552,38 +595,12 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
               </div>
             )}
 
-            {story.links.length > 0 && (
-              <div className="task-links">
-                {story.links.map((link, i) => {
-                  let label: string;
-                  try {
-                    const u = new URL(link);
-                    const parts = u.pathname.split('/').filter(Boolean);
-                    if (u.hostname === 'github.com' && parts.length >= 4 && parts[2] === 'pull') {
-                      label = `${parts[1]} #${parts[3]}`;
-                    } else {
-                      label = u.hostname;
-                    }
-                  } catch {
-                    label = link;
-                  }
-                  const isPR = label.includes('#');
-                  return (
-                    <a
-                      key={i}
-                      href={link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className={isPR && isSingleTask ? 'task-link task-link-pr' : 'task-link'}
-                    >
-                      {isPR && isSingleTask ? `🔗 ${label}` : label}
-                    </a>
-                  );
-                })}
-              </div>
-            )}
-
-            {!isSingleTask && (
+            {story.tasks.length === 1 ? (
+              <SingleTaskPRRow
+                task={story.tasks[0]}
+                onRefreshPR={() => handleRefreshPR(story.id, story.tasks[0].id)}
+              />
+            ) : story.tasks.length > 1 ? (
               <div className="pipeline">
                 {story.tasks.map((t, idx) => {
                   const blocked = isBlocked(story, t);
@@ -603,7 +620,7 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
                   );
                 })}
               </div>
-            )}
+            ) : null}
 
             <div className="story-footer">
               <select
@@ -629,8 +646,17 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
               </select>
             </div>
 
+            <ContextEntryList
+              entries={contextEntriesMap[story.id] || []}
+              onDelete={(entryId) => handleDeleteContextEntry(story.id, entryId)}
+              onUpdate={(entryId, content, entryType) => handleUpdateContextEntry(story.id, entryId, content, entryType)}
+            />
+
             {contextId === story.id && (
-              <ContextInput storyId={story.id} onAdded={() => { setContextId(null); onRefresh(); }} />
+              <ContextInput
+                storyId={story.id}
+                onAdded={() => fetchContextEntries(story.id)}
+              />
             )}
 
             {expandedId === story.id && (
@@ -646,6 +672,69 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function SingleTaskPRRow({
+  task,
+  onRefreshPR,
+}: {
+  task: StoryTask;
+  onRefreshPR: () => void;
+}) {
+  const [refreshing, setRefreshing] = useState(false);
+  const prStatus = getPRStatusLabel(task);
+  const ciInfo = task.pr_check_status ? CI_STATUS_DISPLAY[task.pr_check_status] : null;
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await onRefreshPR();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const prLinkLabel = (() => {
+    if (!task.pr_url) return null;
+    const repo = extractRepoName(task.pr_url);
+    const num = task.pr_number;
+    if (repo && num) return `🔗 ${repo} #${num}`;
+    if (task.pr_title) return `🔗 ${task.pr_title}`;
+    return '🔗 PR';
+  })();
+
+  return (
+    <div className="story-single-pr-row">
+      {task.pr_url && prLinkLabel ? (
+        <a href={task.pr_url} target="_blank" rel="noopener noreferrer" className="task-link task-link-pr">
+          {prLinkLabel}
+        </a>
+      ) : null}
+      <span className="pipeline-pr-state" style={{ color: prStatus.color }}>
+        {prStatus.label}
+      </span>
+      {task.pr_review_decision && REVIEW_LABELS[task.pr_review_decision] && (
+        <span className="pipeline-review-badge" style={{ color: REVIEW_COLORS[task.pr_review_decision] }}>
+          {REVIEW_LABELS[task.pr_review_decision]}
+        </span>
+      )}
+      {ciInfo && (
+        <span style={{ color: ciInfo.color, fontSize: '0.75rem' }}>
+          {ciInfo.icon} {ciInfo.label}
+        </span>
+      )}
+      {task.pr_url && (
+        <button
+          className="btn-icon btn-refresh"
+          onClick={handleRefresh}
+          disabled={refreshing}
+          title="PR状態を更新"
+        >
+          {refreshing ? '⟳' : '↻'}
+        </button>
+      )}
     </div>
   );
 }
@@ -793,6 +882,96 @@ function PipelineStage({
   );
 }
 
+const ENTRY_TYPE_LABELS: Record<string, string> = {
+  note: 'メモ',
+  progress: '進捗',
+  blocker: 'ブロッカー',
+};
+
+const ENTRY_TYPE_COLORS: Record<string, string> = {
+  note: '#6b7280',
+  progress: '#3b82f6',
+  blocker: '#ef4444',
+};
+
+function ContextEntryList({
+  entries,
+  onDelete,
+  onUpdate,
+}: {
+  entries: ContextEntry[];
+  onDelete: (entryId: string) => void;
+  onUpdate: (entryId: string, content: string, entryType: string) => void;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState('');
+  const [editType, setEditType] = useState('note');
+
+  if (entries.length === 0) return null;
+
+  const startEdit = (entry: ContextEntry) => {
+    setEditingId(entry.id);
+    setEditContent(entry.content);
+    setEditType(entry.entry_type);
+  };
+
+  const cancelEdit = () => setEditingId(null);
+
+  const saveEdit = async () => {
+    if (!editingId) return;
+    await onUpdate(editingId, editContent, editType);
+    setEditingId(null);
+  };
+
+  return (
+    <div className="context-entries">
+      {entries.map((entry) =>
+        editingId === entry.id ? (
+          <div key={entry.id} className="context-entry context-entry-editing">
+            <select
+              className="context-entry-type-select"
+              value={editType}
+              onChange={(e) => setEditType(e.target.value)}
+            >
+              <option value="note">メモ</option>
+              <option value="progress">進捗</option>
+              <option value="blocker">ブロッカー</option>
+            </select>
+            <input
+              className="context-entry-edit-input"
+              type="text"
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') saveEdit();
+                if (e.key === 'Escape') cancelEdit();
+              }}
+            />
+            <button className="btn-sm btn-primary" onClick={saveEdit}>保存</button>
+            <button className="btn-sm" onClick={cancelEdit}>キャンセル</button>
+          </div>
+        ) : (
+          <div key={entry.id} className="context-entry">
+            <span
+              className="context-entry-type"
+              style={{ color: ENTRY_TYPE_COLORS[entry.entry_type] || '#6b7280' }}
+            >
+              {ENTRY_TYPE_LABELS[entry.entry_type] || entry.entry_type}
+            </span>
+            <span className="context-entry-content">{entry.content}</span>
+            <span className="context-entry-date">
+              {new Date(entry.created_at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+            </span>
+            <button className="btn-icon btn-sm" onClick={() => startEdit(entry)} title="編集">✏️</button>
+            <button className="btn-icon btn-sm btn-danger" onClick={() => onDelete(entry.id)} title="削除">✕</button>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
 function ContextInput({ storyId, onAdded }: { storyId: string; onAdded: () => void }) {
   const [content, setContent] = useState('');
   const [entryType, setEntryType] = useState('note');
@@ -804,8 +983,8 @@ function ContextInput({ storyId, onAdded }: { storyId: string; onAdded: () => vo
       await api.addContext(storyId, content, entryType);
       setContent('');
       onAdded();
-    } catch (e) {
-      console.error('Failed to add context:', e);
+    } catch (err) {
+      console.error('Failed to add context:', err);
     }
   };
 

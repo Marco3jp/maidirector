@@ -9,7 +9,6 @@ export interface Story {
   status: StoryStatus;
   priority: number;
   project: string;
-  links: string[];
   tags: string[];
   snoozed_until: string | null;
   last_active_at: string;
@@ -50,7 +49,6 @@ export interface CreateStoryRequest {
   layer_chain?: string;
   priority?: number;
   project?: string;
-  links?: string[];
   tags?: string[];
 }
 

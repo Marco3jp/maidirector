@@ -257,9 +257,6 @@ func formatStories(stories []*task.Story) string {
 			b.WriteString(fmt.Sprintf("  tags: %s\n", strings.Join(s.Tags, ", ")))
 		}
 		if len(s.Tasks) == 0 {
-			if len(s.Links) > 0 {
-				b.WriteString(fmt.Sprintf("  リンク: %s\n", strings.Join(s.Links, ", ")))
-			}
 			b.WriteString("  タスク: なし（単タスク・上流/下流依存なし）\n")
 			continue
 		}

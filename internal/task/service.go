@@ -19,6 +19,8 @@ type StoryStore interface {
 	RemoveTaskDep(taskID, dependsOnID string) error
 	CreateContextEntry(e *ContextEntry) error
 	ListContextEntries(storyID string) ([]*ContextEntry, error)
+	DeleteContextEntry(id string) error
+	UpdateContextEntry(e *ContextEntry) error
 	SetSetting(key, value string) error
 	GetSetting(key string) (string, error)
 	FindStoryByPRURL(prURL string) (string, error)
@@ -94,6 +96,14 @@ func (s *StoryService) AddContext(entry *ContextEntry) error {
 
 func (s *StoryService) ListContext(storyID string) ([]*ContextEntry, error) {
 	return s.store.ListContextEntries(storyID)
+}
+
+func (s *StoryService) DeleteContext(id string) error {
+	return s.store.DeleteContextEntry(id)
+}
+
+func (s *StoryService) UpdateContext(entry *ContextEntry) error {
+	return s.store.UpdateContextEntry(entry)
 }
 
 func (s *StoryService) SetSetting(key, value string) error {

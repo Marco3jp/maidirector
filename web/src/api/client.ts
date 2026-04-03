@@ -93,6 +93,17 @@ export const api = {
     return request(`/stories/${storyId}/context`);
   },
 
+  updateContext(storyId: string, entryId: string, content: string, entryType: string): Promise<ContextEntry> {
+    return request(`/stories/${storyId}/context/${entryId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content, entry_type: entryType }),
+    });
+  },
+
+  deleteContext(storyId: string, entryId: string): Promise<void> {
+    return request(`/stories/${storyId}/context/${entryId}`, { method: 'DELETE' });
+  },
+
   getLayerChains(): Promise<LayerChain[]> {
     return request('/layer-chains');
   },

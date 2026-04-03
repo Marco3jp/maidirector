@@ -61,6 +61,8 @@ func NewServer(cfg *config.Config, storySvc *task.StoryService, ctxMgr *context.
 	mux.HandleFunc("POST /api/stories/{id}/unsnooze", s.handleUnsnoozeStory)
 	mux.HandleFunc("POST /api/stories/{id}/context", s.handleAddContext)
 	mux.HandleFunc("GET /api/stories/{id}/context", s.handleListContext)
+	mux.HandleFunc("PUT /api/stories/{id}/context/{entryId}", s.handleUpdateContext)
+	mux.HandleFunc("DELETE /api/stories/{id}/context/{entryId}", s.handleDeleteContext)
 	mux.HandleFunc("GET /api/layer-chains", s.handleGetLayerChains)
 
 	mux.HandleFunc("POST /api/suggest", s.handleSuggest)
@@ -204,7 +206,6 @@ func (s *Server) handleUpdateStory(w http.ResponseWriter, r *http.Request) {
 	existing.Status = updates.Status
 	existing.Priority = updates.Priority
 	existing.Project = updates.Project
-	existing.Links = updates.Links
 	existing.Tags = updates.Tags
 
 	if err := s.storySvc.Update(existing); err != nil {
@@ -399,6 +400,35 @@ func (s *Server) handleListContext(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, entries)
 }
 
+func (s *Server) handleUpdateContext(w http.ResponseWriter, r *http.Request) {
+	entryID := r.PathValue("entryId")
+
+	var updates task.ContextEntry
+	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	updates.ID = entryID
+	if err := s.storySvc.UpdateContext(&updates); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, updates)
+}
+
+func (s *Server) handleDeleteContext(w http.ResponseWriter, r *http.Request) {
+	entryID := r.PathValue("entryId")
+
+	if err := s.storySvc.DeleteContext(entryID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- PR refresh ---
 
 func (s *Server) handleRefreshTaskPR(w http.ResponseWriter, r *http.Request) {
@@ -460,38 +490,30 @@ func (s *Server) refreshPRStates() {
 		return
 	}
 	for _, story := range stories {
+		allMerged := len(story.Tasks) > 0
 		for _, t := range story.Tasks {
 			if t.PRUrl == "" || t.Status == task.TaskStatusMerged {
+				if t.Status != task.TaskStatusMerged {
+					allMerged = false
+				}
 				continue
 			}
 			s.applyPRInfo(t)
 			if err := s.storySvc.UpdateTask(t); err != nil {
 				log.Printf("warning: failed to update task after PR refresh: %v", err)
 			}
+			if t.Status != task.TaskStatusMerged {
+				allMerged = false
+			}
 		}
-		if len(story.Tasks) == 0 && len(story.Links) > 0 {
-			s.checkAndCompleteReviewStory(story)
+		if allMerged && story.Status == task.StoryStatusActive {
+			story.Status = task.StoryStatusCompleted
+			if err := s.storySvc.Update(story); err != nil {
+				log.Printf("warning: failed to auto-complete story %s: %v", story.ID, err)
+				continue
+			}
+			s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: story})
 		}
-	}
-}
-
-func (s *Server) checkAndCompleteReviewStory(story *task.Story) {
-	prURL := story.Links[0]
-	if _, _, _, ok := github.ParsePRURL(prURL); !ok {
-		return
-	}
-	info, err := s.ghClient.GetPRInfo(prURL)
-	if err != nil {
-		log.Printf("warning: failed to fetch PR info for review story %s: %v", story.ID, err)
-		return
-	}
-	if info.State == "MERGED" || info.State == "CLOSED" {
-		story.Status = task.StoryStatusCompleted
-		if err := s.storySvc.Update(story); err != nil {
-			log.Printf("warning: failed to complete review story %s: %v", story.ID, err)
-			return
-		}
-		s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: story})
 	}
 }
 
@@ -588,7 +610,6 @@ func (s *Server) handleScanOrgPRs(w http.ResponseWriter, r *http.Request) {
 			Title:    title,
 			Status:   task.StoryStatusActive,
 			Priority: 4,
-			Links:    []string{pr.URL},
 			Tags:     []string{"review"},
 		}
 		if isBot {
@@ -599,7 +620,22 @@ func (s *Server) handleScanOrgPRs(w http.ResponseWriter, r *http.Request) {
 			log.Printf("warning: failed to create review story for PR %s: %v", pr.URL, err)
 			continue
 		}
-		st.Tasks = []*task.StoryTask{}
+
+		t := &task.StoryTask{
+			StoryID: st.ID,
+			Name:    "レビュー",
+			Status:  task.TaskStatusPending,
+			PRUrl:   pr.URL,
+		}
+		if err := s.storySvc.AddTask(t); err != nil {
+			log.Printf("warning: failed to create review task for PR %s: %v", pr.URL, err)
+			continue
+		}
+		s.applyPRInfo(t)
+		if err := s.storySvc.UpdateTask(t); err != nil {
+			log.Printf("warning: failed to update review task PR info for %s: %v", pr.URL, err)
+		}
+		st.Tasks = []*task.StoryTask{t}
 
 		go s.vectorizeStory(st)
 		s.wsHub.Broadcast(ws.Message{Type: "story_created", Payload: st})
@@ -609,8 +645,6 @@ func (s *Server) handleScanOrgPRs(w http.ResponseWriter, r *http.Request) {
 	if err := s.storySvc.SetSetting(settingLastScanTime, time.Now().Format(time.RFC3339)); err != nil {
 		log.Printf("warning: failed to save last scan time: %v", err)
 	}
-
-	s.refreshPRStates()
 
 	result := map[string]any{
 		"scanned": len(prs),

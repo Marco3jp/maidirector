@@ -5,8 +5,8 @@
 
 ## Status
 
-- **現在のフェーズ**: Phase 3a 完了 + UI 改善継続中
-- **次にやること**: Phase 2c'''（Suggest/Chat のレビュー待ち PR を除外する判定）→ Phase 2d（チャットからのタスク操作）
+- **現在のフェーズ**: Phase 3a 完了、Phase 2c 系改善継続中
+- **次にやること**: Phase 2c'''（Suggest/Chat のレビュー待ち PR 除外判定の完全実装）→ Phase 2d（チャットからのタスク操作）
 
 ## Roadmap
 
@@ -18,10 +18,10 @@ Go backend + React dashboard + Ollama + SQLite + Qdrant。ストーリー CRUD�
 - **Phase 2a** ✅ stories/story_layers CRUD + パイプラインビュー + Suggest/Chat 統合
 - **Phase 2b** ✅ GitHub 連携（`gh pr view` ラッパー）。PR 情報自動取得・表示、一括リロード
 - **Phase 2.5** ✅ Task/Story 統合（単タスク = レイヤー 0 個の Story）
-- **Phase 2c** ✅ 組織内 PR スキャン → レビュータスク自動生成（`bot_policy` 設定あり）
+- **Phase 2c** ✅ 組織内 PR スキャン → レビュータスク自動生成（`bot_policy` 設定あり）。PR Merge/Close 時にストーリーを自動完了。`story.links` 廃止、PR URL は `story_tasks.pr_url` で一元管理
 - **Phase 2c'** ✅ スヌーズ機能（30m/1h/3h/明日/来週、ソート最下部、残り時間バッジ）
-- **Phase 2c''** ✅ リポジトリ非表示フィルタ（localStorage 永続化）
-- **Phase 2c'''** 部分対応: `formatStories` で単タスクのリンク・依存情報を LLM に渡すよう修正、プロンプトの上流/下流判断基準を明確化。レビュー待ち PR の完全な除外判定は未実装
+- **Phase 2c''** ✅ リポジトリ非表示フィルタ（`task.pr_url` ベース、localStorage 永続化）
+- **Phase 2c'''** 部分対応: `formatStories` で依存情報・PR 情報を LLM に渡すよう改善。Suggest/Chat でのレビュー待ち PR の完全な除外判定は未実装
 - **Phase 2d** 未実装: チャットからのタスク操作（Ollama tool use または `/` コマンド）
 
 ### Phase 3: データモデル進化
@@ -48,8 +48,8 @@ Slack / Miro / スプレッドシート連携、複数サービス横断タス�
 stories
   id, title, description, layer_chain, status (active/completed/archived)
   priority (0=なし, 1=P1最高 〜 5=P5最低)  ※手動追加デフォルト P3、PRスキャンデフォルト P4
-  project, links (JSON), tags (JSON)
-  snoozed_until DATETIME (UTC テキスト形式 "YYYY-MM-DD HH:MM:SS" または T+Z)
+  project, tags (JSON)
+  snoozed_until DATETIME (UTC テキスト形式 "YYYY-MM-DD HH:MM:SS")
   last_active_at, created_at, updated_at
 
   ソート:
@@ -85,7 +85,6 @@ conversations / summaries  （LLM チャット履歴・サマリー）
 - Phase 2c''': Suggest/Chat でレビュー待ち PR の完全な除外判定が未実装
 - Phase 2d: チャットからのタスク操作が未実装
 - `story_layers` テーブルが残存中 → `story_tasks` 移行確認後に `DROP TABLE story_layers` を追加すること
-- 全タスク完了時にストーリーを自動完了扱いにする機能が未実装
 
 ## Session Log
 
@@ -104,10 +103,18 @@ Go backend + React frontend フルスタック実装、embed.FS で単一バイ�
 `story_tasks` テーブル（`story_layers` から `layer_name → name` でリネーム移行）、`task_dependencies` ジャンクションテーブル追加。ブロッキング判定を `DependsOn` ベースに変更。レイヤーチェーンテンプレート選択時にタスク + deps を自動生成。`TaskManager` コンポーネントで deps 追加・解除 UI。
 
 ### 2026-04-03: UI 改善各種
-優先度変更 UI、ストーリー説明文インライン編集・URL 自動リンク化、一括/個別 collapse、ストーリー追加フォーム改善。ヘッダー削除、PRスキャン/全PR更新ボタンをフィルタバーへ移動（セパレーター区切り）。
+優先度変更 UI、ストーリー説明文インライン編集・URL 自動リンク化、一括/個別 collapse、ストーリー追加フォーム改善。ヘッダー削除、PRスキャン/全PR更新ボタンをフィルタバーへ移動。
 
-### 2026-04-03: Suggest 誤判定修正（Phase 2c''' 部分対応）
-単タスクストーリー（`Tasks` が空）の `Links` が LLM プロンプトに含まれていなかった問題と、`DependsOn` が空のタスクに「独立」が明示されていなかった問題を修正。`formatStories` で単タスクのリンクを出力、タスクに `[依存なし・独立タスク]` / `[上流: タスク名(ステータス)]` を明示。システムプロンプトの判断基準 2 に「depends_on で定義された同一ストーリー内の関係のみ」を明記。
+### 2026-04-03: コンテキストエントリ（メモ）の表示・編集・削除実装
 
-### 2026-04-03: PRスキャン由来レビューストーリーの自動完了
-`refreshPRStates()` を拡張し、タスクなし・`links[0]` に GitHub PR URL が含まれるストーリー（PRスキャン由来の `[Review]` ストーリー）を対象に PR 状態を確認、MERGED/CLOSED であればストーリーを `completed` に自動更新するロジック（`checkAndCompleteReviewStory`）を追加。`handleScanOrgPRs` の末尾でも `refreshPRStates()` を呼ぶことで、スキャン実行時・Suggest/Chat 時・全PR更新ボタン押下時の 3 タイミングで自動反映される。コンパイル確認済み（`go build ./...` 成功）。
+- **バックエンド**: `DELETE /api/stories/{id}/context/{entryId}` / `PUT /api/stories/{id}/context/{entryId}` エンドポイント追加、`StoryStore` インターフェースに `DeleteContextEntry` / `UpdateContextEntry` を追加
+- **フロントエンド**: `ContextEntryList`（常時表示）と `ContextInput`（📝トグル）に分離。ストーリーリスト表示時に全エントリを一括フェッチ。インライン編集（Enter で保存、Esc でキャンセル）・削除対応。
+
+### 2026-04-03: Phase 2c''' 部分対応 + PRレビューストーリーのリファクタリング
+`story.links` を完全廃止し、PR URL を `story_tasks.pr_url` に一本化。
+
+- **マイグレーション**: 既存レビューストーリーの `links[0]` → `story_tasks` レコード自動変換（`migrateReviewStoryLinks`）、`ALTER TABLE stories DROP COLUMN links`
+- **スキャン**: `handleScanOrgPRs` でストーリー作成直後に「レビュー」タスクを生成し `applyPRInfo()` で PR 情報を即時取得
+- **自動完了**: `refreshPRStates()` に全タスク merged 時のストーリー自動完了ロジックを追加
+- **LLM プロンプト**: `formatStories` で依存情報・PR URL を正しく出力するよう修正（Phase 2c''' 部分対応）
+- **フロントエンド**: リポジトリフィルターを `task.pr_url` ベースに変更、1タスクストーリー用スリムUI（`SingleTaskPRRow`）追加（PR リンク＋状態＋レビュー決定を横並び表示）

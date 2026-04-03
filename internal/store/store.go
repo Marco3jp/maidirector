@@ -119,7 +119,6 @@ func (s *Store) migrate() error {
 		// Phase 2.5: Story にフィールド追加
 		`ALTER TABLE stories ADD COLUMN priority INTEGER DEFAULT 0`,
 		`ALTER TABLE stories ADD COLUMN project TEXT DEFAULT ''`,
-		`ALTER TABLE stories ADD COLUMN links TEXT DEFAULT '[]'`,
 		`ALTER TABLE stories ADD COLUMN tags TEXT DEFAULT '[]'`,
 		`ALTER TABLE stories ADD COLUMN last_active_at DATETIME`,
 		// Phase 2c: settings テーブル
@@ -178,6 +177,16 @@ func (s *Store) migrate() error {
 
 	s.migrateSnoozedUntilToUTC()
 
+	if err := s.migrateReviewStoryLinks(); err != nil {
+		return fmt.Errorf("review story links migration failed: %w", err)
+	}
+
+	if _, err := s.db.Exec(`ALTER TABLE stories DROP COLUMN links`); err != nil {
+		if !strings.Contains(err.Error(), "no such column") {
+			return fmt.Errorf("failed to drop links column: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -195,7 +204,7 @@ func (s *Store) migrateTasksToStories() error {
 		return nil
 	}
 
-	rows, err := s.db.Query(`SELECT id, title, description, status, priority, project, links, tags, created_at, updated_at, last_active_at FROM tasks`)
+	rows, err := s.db.Query(`SELECT id, title, description, status, priority, project, tags, created_at, updated_at, last_active_at FROM tasks`)
 	if err != nil {
 		return err
 	}
@@ -208,11 +217,11 @@ func (s *Store) migrateTasksToStories() error {
 	defer tx.Rollback()
 
 	for rows.Next() {
-		var id, title, description, status, project, linksJSON, tagsJSON string
+		var id, title, description, status, project, tagsJSON string
 		var priority int
 		var createdAt, updatedAt, lastActiveAt time.Time
 
-		if err := rows.Scan(&id, &title, &description, &status, &priority, &project, &linksJSON, &tagsJSON, &createdAt, &updatedAt, &lastActiveAt); err != nil {
+		if err := rows.Scan(&id, &title, &description, &status, &priority, &project, &tagsJSON, &createdAt, &updatedAt, &lastActiveAt); err != nil {
 			return err
 		}
 
@@ -222,9 +231,9 @@ func (s *Store) migrateTasksToStories() error {
 		}
 
 		_, err := tx.Exec(
-			`INSERT OR IGNORE INTO stories (id, title, description, layer_chain, status, priority, project, links, tags, last_active_at, created_at, updated_at)
-			 VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, title, description, storyStatus, priority, project, linksJSON, tagsJSON, lastActiveAt, createdAt, updatedAt,
+			`INSERT OR IGNORE INTO stories (id, title, description, layer_chain, status, priority, project, tags, last_active_at, created_at, updated_at)
+			 VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)`,
+			id, title, description, storyStatus, priority, project, tagsJSON, lastActiveAt, createdAt, updatedAt,
 		)
 		if err != nil {
 			return err
@@ -375,6 +384,60 @@ func (s *Store) migrateSnoozedUntilToUTC() {
 	}
 }
 
+func (s *Store) migrateReviewStoryLinks() error {
+	rows, err := s.db.Query(`
+		SELECT id, links FROM stories
+		WHERE tags LIKE '%"review"%'
+		  AND NOT EXISTS (SELECT 1 FROM story_tasks WHERE story_id = stories.id)
+	`)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such column") {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+
+	type record struct {
+		id    string
+		links []string
+	}
+	var records []record
+	for rows.Next() {
+		var id, linksJSON string
+		if err := rows.Scan(&id, &linksJSON); err != nil {
+			return err
+		}
+		var links []string
+		json.Unmarshal([]byte(linksJSON), &links)
+		if len(links) > 0 {
+			records = append(records, record{id, links})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+
+	for _, r := range records {
+		prURL := r.links[0]
+		if !strings.Contains(prURL, "github.com/") || !strings.Contains(prURL, "/pull/") {
+			continue
+		}
+		taskID := uuid.New().String()
+		now := time.Now()
+		_, err := s.db.Exec(`
+			INSERT INTO story_tasks (id, story_id, name, status, pr_url, pr_number, pr_state,
+				pr_title, pr_review_decision, pr_is_draft, pr_check_status, sort_order, created_at, updated_at)
+			VALUES (?, ?, 'レビュー', 'pending', ?, 0, '', '', '', 0, '', 0, ?, ?)
+		`, taskID, r.id, prURL, now, now)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) migrateContextEntryColumn() {
 	var hasStoryID bool
 	colRows, err := s.db.Query(`PRAGMA table_info(context_entries)`)
@@ -435,6 +498,19 @@ func (s *Store) ListContextEntries(storyID string) ([]*task.ContextEntry, error)
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
+}
+
+func (s *Store) DeleteContextEntry(id string) error {
+	_, err := s.db.Exec(`DELETE FROM context_entries WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) UpdateContextEntry(e *task.ContextEntry) error {
+	_, err := s.db.Exec(
+		`UPDATE context_entries SET content = ?, entry_type = ? WHERE id = ?`,
+		e.Content, e.EntryType, e.ID,
+	)
+	return err
 }
 
 // --- Conversations ---
@@ -512,28 +588,24 @@ func (s *Store) CreateStory(st *task.Story) error {
 	if st.Status == "" {
 		st.Status = task.StoryStatusActive
 	}
-	if st.Links == nil {
-		st.Links = []string{}
-	}
 	if st.Tags == nil {
 		st.Tags = []string{}
 	}
 
-	links, _ := json.Marshal(st.Links)
 	tags, _ := json.Marshal(st.Tags)
 
 	_, err := s.db.Exec(
-		`INSERT INTO stories (id, title, description, layer_chain, status, priority, project, links, tags, last_active_at, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO stories (id, title, description, layer_chain, status, priority, project, tags, last_active_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		st.ID, st.Title, st.Description, st.LayerChain, st.Status, st.Priority, st.Project,
-		string(links), string(tags), st.LastActiveAt, st.CreatedAt, st.UpdatedAt,
+		string(tags), st.LastActiveAt, st.CreatedAt, st.UpdatedAt,
 	)
 	return err
 }
 
 func (s *Store) GetStory(id string) (*task.Story, error) {
 	row := s.db.QueryRow(
-		`SELECT id, title, description, layer_chain, status, priority, project, links, tags, snoozed_until, last_active_at, created_at, updated_at FROM stories WHERE id = ?`, id,
+		`SELECT id, title, description, layer_chain, status, priority, project, tags, snoozed_until, last_active_at, created_at, updated_at FROM stories WHERE id = ?`, id,
 	)
 	st, err := scanStoryRow(row)
 	if err != nil {
@@ -549,7 +621,7 @@ func (s *Store) GetStory(id string) (*task.Story, error) {
 }
 
 func (s *Store) ListStories(status string) ([]*task.Story, error) {
-	query := `SELECT id, title, description, layer_chain, status, priority, project, links, tags, snoozed_until, last_active_at, created_at, updated_at FROM stories WHERE 1=1`
+	query := `SELECT id, title, description, layer_chain, status, priority, project, tags, snoozed_until, last_active_at, created_at, updated_at FROM stories WHERE 1=1`
 	args := []any{}
 
 	if status != "" {
@@ -584,13 +656,12 @@ func (s *Store) UpdateStory(st *task.Story) error {
 	st.UpdatedAt = time.Now()
 	st.LastActiveAt = st.UpdatedAt
 
-	links, _ := json.Marshal(st.Links)
 	tags, _ := json.Marshal(st.Tags)
 
 	_, err := s.db.Exec(
-		`UPDATE stories SET title=?, description=?, layer_chain=?, status=?, priority=?, project=?, links=?, tags=?, last_active_at=?, updated_at=? WHERE id=?`,
+		`UPDATE stories SET title=?, description=?, layer_chain=?, status=?, priority=?, project=?, tags=?, last_active_at=?, updated_at=? WHERE id=?`,
 		st.Title, st.Description, st.LayerChain, st.Status, st.Priority, st.Project,
-		string(links), string(tags), st.LastActiveAt, st.UpdatedAt, st.ID,
+		string(tags), st.LastActiveAt, st.UpdatedAt, st.ID,
 	)
 	return err
 }
@@ -810,17 +881,6 @@ func (s *Store) GetSetting(key string) (string, error) {
 func (s *Store) FindStoryByPRURL(prURL string) (string, error) {
 	var id string
 	err := s.db.QueryRow(
-		`SELECT s.id FROM stories s, json_each(s.links) j WHERE j.value = ? LIMIT 1`,
-		prURL,
-	).Scan(&id)
-	if err == nil {
-		return id, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", err
-	}
-
-	err = s.db.QueryRow(
 		`SELECT story_id FROM story_tasks WHERE pr_url = ? LIMIT 1`,
 		prURL,
 	).Scan(&id)
@@ -855,13 +915,13 @@ type scannable interface {
 
 func scanStoryRow(sc scannable) (*task.Story, error) {
 	st := &task.Story{}
-	var linksJSON, tagsJSON string
+	var tagsJSON string
 	var lastActiveAt sql.NullTime
 	var snoozedUntil sql.NullTime
 
 	err := sc.Scan(
 		&st.ID, &st.Title, &st.Description, &st.LayerChain, &st.Status,
-		&st.Priority, &st.Project, &linksJSON, &tagsJSON,
+		&st.Priority, &st.Project, &tagsJSON,
 		&snoozedUntil, &lastActiveAt, &st.CreatedAt, &st.UpdatedAt,
 	)
 	if err != nil {
@@ -878,12 +938,8 @@ func scanStoryRow(sc scannable) (*task.Story, error) {
 		st.LastActiveAt = st.UpdatedAt
 	}
 
-	json.Unmarshal([]byte(linksJSON), &st.Links)
 	json.Unmarshal([]byte(tagsJSON), &st.Tags)
 
-	if st.Links == nil {
-		st.Links = []string{}
-	}
 	if st.Tags == nil {
 		st.Tags = []string{}
 	}

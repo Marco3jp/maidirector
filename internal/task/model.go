@@ -49,7 +49,6 @@ type Story struct {
 	Status       StoryStatus  `json:"status"`
 	Priority     int          `json:"priority"`
 	Project      string       `json:"project"`
-	Links        []string     `json:"links"`
 	Tags         []string     `json:"tags"`
 	SnoozedUntil *time.Time   `json:"snoozed_until"`
 	LastActiveAt time.Time    `json:"last_active_at"`
