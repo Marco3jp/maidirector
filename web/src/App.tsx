@@ -16,7 +16,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<'suggest' | 'chat'>('suggest');
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
-  const [refreshingAll, setRefreshingAll] = useState(false);
+  const [lastScanAt, setLastScanAt] = useState<Date | null>(null);
   const [collapseSignal, setCollapseSignal] = useState(0);
   const [expandSignal, setExpandSignal] = useState(0);
   const suppressWsRefreshRef = useRef(false);
@@ -68,34 +68,26 @@ function App() {
     setTimeout(() => { suppressWsRefreshRef.current = false; }, 500);
   }, []);
 
-  const handleScanOrgPRs = useCallback(async () => {
+  const handleScanAndRefresh = useCallback(async () => {
     setScanning(true);
     setScanResult(null);
     try {
-      const result = await api.scanOrgPRs();
-      setScanResult(`${result.scanned}件スキャン → ${result.created}件作成 / ${result.skipped}件スキップ`);
+      const [result] = await Promise.all([
+        api.scanOrgPRs(),
+        api.refreshAllPRs(),
+      ]);
+      setLastScanAt(new Date());
       if (result.created > 0) {
-        loadStories();
+        setScanResult(`${result.created}件追加`);
+        setTimeout(() => setScanResult(null), 5000);
       }
-      setTimeout(() => setScanResult(null), 5000);
+      loadStories();
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'スキャンに失敗しました';
       setScanResult(msg);
       setTimeout(() => setScanResult(null), 5000);
     } finally {
       setScanning(false);
-    }
-  }, [loadStories]);
-
-  const handleRefreshAllPRs = useCallback(async () => {
-    setRefreshingAll(true);
-    try {
-      await api.refreshAllPRs();
-      loadStories();
-    } catch (e) {
-      console.error('Failed to refresh all PRs:', e);
-    } finally {
-      setRefreshingAll(false);
     }
   }, [loadStories]);
 
@@ -146,18 +138,16 @@ function App() {
                 <span className="filter-bar-divider" />
                 <button
                   className="filter-btn"
-                  onClick={handleScanOrgPRs}
+                  onClick={handleScanAndRefresh}
                   disabled={scanning}
                 >
-                  {scanning ? '🔍 スキャン中...' : '🔍 組織PRスキャン'}
+                  {scanning ? '↻ 更新中...' : '↻ PR更新'}
                 </button>
-                <button
-                  className="filter-btn"
-                  onClick={handleRefreshAllPRs}
-                  disabled={refreshingAll}
-                >
-                  {refreshingAll ? '↻ 更新中...' : '↻ 全PR情報を更新'}
-                </button>
+                {lastScanAt && (
+                  <span className="last-scan-time">
+                    {lastScanAt.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                )}
               </div>
             </div>
           </div>

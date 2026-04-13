@@ -104,6 +104,13 @@ body {
   margin: 0 4px;
 }
 
+.last-scan-time {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  align-self: center;
+  white-space: nowrap;
+}
+
 /* Task Form */
 .task-form {
   margin-bottom: 20px;
