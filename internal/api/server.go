@@ -449,11 +449,21 @@ func (s *Server) handleRefreshTaskPR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	prevIsDraft := existing.PRIsDraft
 	s.applyPRInfo(existing)
 
 	if err := s.storySvc.UpdateTask(existing); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	if existing.PRIsDraft != prevIsDraft {
+		story, err := s.storySvc.Get(existing.StoryID)
+		if err == nil && adjustDraftPriority(story, existing.PRIsDraft) {
+			if err := s.storySvc.Update(story); err != nil {
+				log.Printf("warning: failed to update story priority for draft change %s: %v", story.ID, err)
+			}
+		}
 	}
 
 	s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: map[string]string{"story_id": existing.StoryID}})
@@ -480,6 +490,22 @@ func (s *Server) applyPRInfo(t *task.StoryTask) {
 	}
 }
 
+// adjustDraftPriority はドラフト状態に応じて Story の Priority を調整する。
+// ドラフトなら P5 (5) に、ドラフト解除されて P5 のままなら P4 (4) に戻す。
+// ユーザーが手動で P1〜P4 に設定している場合は変更しない。
+// 変更があった場合は true を返す。
+func adjustDraftPriority(story *task.Story, isDraft bool) bool {
+	if isDraft && story.Priority != 5 {
+		story.Priority = 5
+		return true
+	}
+	if !isDraft && story.Priority == 5 {
+		story.Priority = 4
+		return true
+	}
+	return false
+}
+
 func (s *Server) refreshPRStates() {
 	if s.ghClient == nil {
 		return
@@ -491,6 +517,7 @@ func (s *Server) refreshPRStates() {
 	}
 	for _, story := range stories {
 		allMerged := len(story.Tasks) > 0
+		storyNeedsUpdate := false
 		for _, t := range story.Tasks {
 			if t.PRUrl == "" || t.Status == task.TaskStatusMerged {
 				if t.Status != task.TaskStatusMerged {
@@ -498,6 +525,7 @@ func (s *Server) refreshPRStates() {
 				}
 				continue
 			}
+			prevIsDraft := t.PRIsDraft
 			s.applyPRInfo(t)
 			if err := s.storySvc.UpdateTask(t); err != nil {
 				log.Printf("warning: failed to update task after PR refresh: %v", err)
@@ -505,11 +533,19 @@ func (s *Server) refreshPRStates() {
 			if t.Status != task.TaskStatusMerged {
 				allMerged = false
 			}
+			if t.PRIsDraft != prevIsDraft {
+				if adjustDraftPriority(story, t.PRIsDraft) {
+					storyNeedsUpdate = true
+				}
+			}
 		}
 		if allMerged && story.Status == task.StoryStatusActive {
 			story.Status = task.StoryStatusCompleted
+			storyNeedsUpdate = true
+		}
+		if storyNeedsUpdate {
 			if err := s.storySvc.Update(story); err != nil {
-				log.Printf("warning: failed to auto-complete story %s: %v", story.ID, err)
+				log.Printf("warning: failed to update story %s: %v", story.ID, err)
 				continue
 			}
 			s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: story})
@@ -634,6 +670,12 @@ func (s *Server) handleScanOrgPRs(w http.ResponseWriter, r *http.Request) {
 		s.applyPRInfo(t)
 		if err := s.storySvc.UpdateTask(t); err != nil {
 			log.Printf("warning: failed to update review task PR info for %s: %v", pr.URL, err)
+		}
+		if t.PRIsDraft && !isBot {
+			st.Priority = 5
+			if err := s.storySvc.Update(st); err != nil {
+				log.Printf("warning: failed to update story priority for draft PR %s: %v", pr.URL, err)
+			}
 		}
 		st.Tasks = []*task.StoryTask{t}
 
