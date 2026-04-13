@@ -4,6 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 QDRANT_COMPOSE_DIR="$(cd "$SCRIPT_DIR/../agent-extended-memory" && pwd)"
 
+QDRANT_PORT=6333
+OLLAMA_PORT=11434
+BACKEND_PORT=20135
+FRONTEND_PORT=5173
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -58,7 +63,7 @@ fi
 
 QDRANT_RUNNING=$(docker ps --filter "ancestor=qdrant/qdrant" --filter "status=running" -q 2>/dev/null)
 if [ -n "$QDRANT_RUNNING" ]; then
-  skip "Qdrant はすでに起動中 (localhost:6333)"
+  skip "Qdrant はすでに起動中 (localhost:${QDRANT_PORT})"
 else
   QDRANT_STOPPED=$(docker ps -a --filter "ancestor=qdrant/qdrant" --filter "status=exited" -q 2>/dev/null)
   if [ -n "$QDRANT_STOPPED" ]; then
@@ -69,8 +74,8 @@ else
     docker compose -f "$QDRANT_COMPOSE_DIR/docker-compose.yml" up -d qdrant
   fi
   sleep 2
-  if curl -sf http://localhost:6333/healthz &>/dev/null; then
-    ok "Qdrant 起動完了 (localhost:6333)"
+  if curl -sf "http://localhost:${QDRANT_PORT}/healthz" &>/dev/null; then
+    ok "Qdrant 起動完了 (localhost:${QDRANT_PORT})"
   else
     fail "Qdrant の起動に失敗しました"
     exit 1
@@ -78,19 +83,19 @@ else
 fi
 
 header "3. Ollama"
-if curl -sf http://localhost:11434/api/tags &>/dev/null; then
-  skip "Ollama はすでに起動中 (localhost:11434)"
+if curl -sf "http://localhost:${OLLAMA_PORT}/api/tags" &>/dev/null; then
+  skip "Ollama はすでに起動中 (localhost:${OLLAMA_PORT})"
 else
   echo -e "  Ollama を起動中..."
   ollama serve &>/dev/null &
   OLLAMA_PID=$!
   for i in {1..10}; do
-    if curl -sf http://localhost:11434/api/tags &>/dev/null; then
+    if curl -sf "http://localhost:${OLLAMA_PORT}/api/tags" &>/dev/null; then
       break
     fi
     sleep 1
   done
-  if curl -sf http://localhost:11434/api/tags &>/dev/null; then
+  if curl -sf "http://localhost:${OLLAMA_PORT}/api/tags" &>/dev/null; then
     ok "Ollama 起動完了 (PID: $OLLAMA_PID)"
   else
     fail "Ollama の起動に失敗しました"
@@ -99,7 +104,7 @@ else
   fi
 fi
 
-INSTALLED_MODELS=$(curl -sf http://localhost:11434/api/tags | python3 -c "import sys,json; [print(m['name'].split(':')[0]+':'+m['name'].split(':')[1] if ':' in m['name'] else m['name']) for m in json.load(sys.stdin).get('models',[])]" 2>/dev/null)
+INSTALLED_MODELS=$(curl -sf "http://localhost:${OLLAMA_PORT}/api/tags" | python3 -c "import sys,json; [print(m['name'].split(':')[0]+':'+m['name'].split(':')[1] if ':' in m['name'] else m['name']) for m in json.load(sys.stdin).get('models',[])]" 2>/dev/null)
 
 CHAT_MODEL=$(awk '/chat_model:/{print $2}' "$SCRIPT_DIR/maidirector.yml")
 EMBED_MODEL=$(awk '/embedding_model:/{print $2}' "$SCRIPT_DIR/maidirector.yml")
@@ -139,22 +144,22 @@ fi
 
 header "6. maidirector 起動"
 
-BACKEND_PID=$(lsof -ti:8080 2>/dev/null || true)
+BACKEND_PID=$(lsof -ti:"$BACKEND_PORT" 2>/dev/null || true)
 if [ -n "$BACKEND_PID" ]; then
-  skip "バックエンド はすでに起動中 (port 8080, PID: $BACKEND_PID)"
+  skip "バックエンド はすでに起動中 (port ${BACKEND_PORT}, PID: $BACKEND_PID)"
 else
   echo -e "  バックエンド起動中..."
   cd "$SCRIPT_DIR" && go run ./cmd/maidirector serve &>"$SCRIPT_DIR/.dev-backend.log" &
   sleep 3
-  BACKEND_PID=$(lsof -ti:8080 2>/dev/null || true)
-  if curl -sf http://localhost:8080/api/stories &>/dev/null; then
-    ok "バックエンド起動完了 (port 8080, PID: ${BACKEND_PID:-?})"
+  BACKEND_PID=$(lsof -ti:"$BACKEND_PORT" 2>/dev/null || true)
+  if curl -sf "http://localhost:${BACKEND_PORT}/api/stories" &>/dev/null; then
+    ok "バックエンド起動完了 (port ${BACKEND_PORT}, PID: ${BACKEND_PID:-?})"
   else
     warn "バックエンドの起動を待機中..."
     sleep 3
-    BACKEND_PID=$(lsof -ti:8080 2>/dev/null || true)
-    if curl -sf http://localhost:8080/api/stories &>/dev/null; then
-      ok "バックエンド起動完了 (port 8080, PID: ${BACKEND_PID:-?})"
+    BACKEND_PID=$(lsof -ti:"$BACKEND_PORT" 2>/dev/null || true)
+    if curl -sf "http://localhost:${BACKEND_PORT}/api/stories" &>/dev/null; then
+      ok "バックエンド起動完了 (port ${BACKEND_PORT}, PID: ${BACKEND_PID:-?})"
     else
       fail "バックエンドの起動に失敗しました"
       warn "ログ: $SCRIPT_DIR/.dev-backend.log"
@@ -163,27 +168,27 @@ else
   fi
 fi
 
-FRONTEND_PID=$(lsof -ti:5173 2>/dev/null || true)
+FRONTEND_PID=$(lsof -ti:"$FRONTEND_PORT" 2>/dev/null || true)
 if [ -n "$FRONTEND_PID" ]; then
-  skip "フロントエンド はすでに起動中 (port 5173, PID: $FRONTEND_PID)"
+  skip "フロントエンド はすでに起動中 (port ${FRONTEND_PORT}, PID: $FRONTEND_PID)"
 else
   echo -e "  フロントエンド dev server 起動中..."
-  cd "$SCRIPT_DIR/web" && npx vite --host &>"$SCRIPT_DIR/.dev-frontend.log" &
+  cd "$SCRIPT_DIR/web" && npx vite --host --port "$FRONTEND_PORT" &>"$SCRIPT_DIR/.dev-frontend.log" &
   sleep 2
-  FRONTEND_PID=$(lsof -ti:5173 2>/dev/null || true)
-  ok "フロントエンド起動完了 (port 5173, PID: ${FRONTEND_PID:-?})"
+  FRONTEND_PID=$(lsof -ti:"$FRONTEND_PORT" 2>/dev/null || true)
+  ok "フロントエンド起動完了 (port ${FRONTEND_PORT}, PID: ${FRONTEND_PID:-?})"
 fi
 
 echo ""
 echo -e "${BOLD}==============================${RESET}"
 echo -e "${GREEN}${BOLD}起動完了!${RESET}"
 echo ""
-echo -e "  ダッシュボード:  ${CYAN}http://localhost:5173${RESET} (dev) / ${CYAN}http://localhost:8080${RESET} (embed)"
-echo -e "  API:             ${CYAN}http://localhost:8080/api${RESET}"
-echo -e "  Qdrant:          ${CYAN}http://localhost:6333/dashboard${RESET}"
-echo -e "  Ollama:          ${CYAN}http://localhost:11434${RESET}"
+echo -e "  ダッシュボード:  ${CYAN}http://localhost:${FRONTEND_PORT}${RESET} (dev) / ${CYAN}http://localhost:${BACKEND_PORT}${RESET} (embed)"
+echo -e "  API:             ${CYAN}http://localhost:${BACKEND_PORT}/api${RESET}"
+echo -e "  Qdrant:          ${CYAN}http://localhost:${QDRANT_PORT}/dashboard${RESET}"
+echo -e "  Ollama:          ${CYAN}http://localhost:${OLLAMA_PORT}${RESET}"
 echo ""
 echo -e "  停止するには:"
-echo -e "    ${YELLOW}lsof -ti:8080 | xargs kill   # バックエンド${RESET}"
-echo -e "    ${YELLOW}lsof -ti:5173 | xargs kill   # フロントエンド${RESET}"
+echo -e "    ${YELLOW}lsof -ti:${BACKEND_PORT} | xargs kill   # バックエンド${RESET}"
+echo -e "    ${YELLOW}lsof -ti:${FRONTEND_PORT} | xargs kill   # フロントエンド${RESET}"
 echo -e "    ${YELLOW}# Qdrant/Ollama はそのまま残して OK${RESET}"

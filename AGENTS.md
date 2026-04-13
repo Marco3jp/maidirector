@@ -83,7 +83,7 @@ cd web && npx tsc --noEmit             # TypeScript フロントエンド
 動作確認完了後は必ず停止する。**プロセス kill も `required_permissions: ["all"]` が必要。**
 
 ```bash
-lsof -ti:8080 | xargs kill          # バックエンド (port 8080)
+lsof -ti:20135 | xargs kill          # バックエンド (port 20135)
 lsof -ti:5173 | xargs kill          # フロントエンド dev server (port 5173)
 ```
 

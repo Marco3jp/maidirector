@@ -48,7 +48,7 @@ type QdrantConfig struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		Server: ServerConfig{Port: 8080},
+		Server: ServerConfig{Port: 20135},
 		LLM: LLMConfig{
 			Provider:       "ollama",
 			ChatModel:      "qwen2.5:14b",
