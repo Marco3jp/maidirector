@@ -95,6 +95,25 @@ body {
   padding: 4px 7px;
 }
 
+.filter-btn-count {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.2);
+  color: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 0 5px;
+  min-width: 16px;
+  text-align: center;
+  line-height: 16px;
+  vertical-align: middle;
+}
+
+.filter-btn:not(.active) .filter-btn-count {
+  background: var(--border);
+  color: var(--text-muted);
+}
+
 .filter-bar-divider {
   width: 1px;
   height: 28px;

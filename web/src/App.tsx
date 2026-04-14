@@ -3,7 +3,7 @@ import type { Story, StoryStatus } from './api/types';
 import { api } from './api/client';
 import { useWebSocket } from './hooks/useWebSocket';
 import { StoryForm } from './components/StoryForm';
-import { StoryPipeline } from './components/StoryPipeline';
+import { StoryPipeline, extractRepoName } from './components/StoryPipeline';
 import { SuggestPanel } from './components/SuggestPanel';
 import { ChatPanel } from './components/ChatPanel';
 import './App.css';
@@ -19,7 +19,22 @@ function App() {
   const [lastScanAt, setLastScanAt] = useState<Date | null>(null);
   const [collapseSignal, setCollapseSignal] = useState(0);
   const [expandSignal, setExpandSignal] = useState(0);
+  const [hiddenRepos, setHiddenRepos] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('maidirector:hiddenRepos');
+      return saved ? new Set<string>(JSON.parse(saved)) : new Set<string>();
+    } catch {
+      return new Set<string>();
+    }
+  });
   const suppressWsRefreshRef = useRef(false);
+
+  const updateHiddenRepos = useCallback((next: Set<string>) => {
+    setHiddenRepos(next);
+    try {
+      localStorage.setItem('maidirector:hiddenRepos', JSON.stringify([...next]));
+    } catch { /* ignore */ }
+  }, []);
   const snoozeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadStories = useCallback(async () => {
@@ -104,6 +119,13 @@ function App() {
   const completedStories = stories.filter((s) => s.status === 'completed');
   const archivedStories = stories.filter((s) => s.status === 'archived');
 
+  const visibleActiveCount = activeStories.filter((s) => {
+    if (hiddenRepos.size === 0) return true;
+    const taskRepos = s.tasks.map((t) => extractRepoName(t.pr_url)).filter((r): r is string => r !== null);
+    if (taskRepos.length === 0) return true;
+    return taskRepos.some((r) => !hiddenRepos.has(r));
+  }).length;
+
   return (
     <div className="app">
       <main className="app-main">
@@ -117,7 +139,7 @@ function App() {
                     className={`filter-btn ${filterStatus === s ? 'active' : ''}`}
                     onClick={() => setFilterStatus(s)}
                   >
-                    {s === '' ? 'すべて' : s === 'active' ? 'アクティブ' : s === 'completed' ? '完了' : 'アーカイブ'}
+                    {s === '' ? 'すべて' : s === 'active' ? <>アクティブ <span className="filter-btn-count">{visibleActiveCount}</span></> : s === 'completed' ? '完了' : 'アーカイブ'}
                   </button>
                 ))}
                 <span className="filter-bar-divider" />
@@ -160,7 +182,7 @@ function App() {
 
           <StoryForm onCreated={handleStoryCreated} />
 
-          <StoryPipeline stories={filterStatus === '' ? activeStories : stories} onRefresh={loadStories} collapseSignal={collapseSignal} expandSignal={expandSignal} />
+          <StoryPipeline stories={filterStatus === '' ? activeStories : stories} onRefresh={loadStories} collapseSignal={collapseSignal} expandSignal={expandSignal} hiddenRepos={hiddenRepos} onHiddenReposChange={updateHiddenRepos} />
 
           {filterStatus === '' && completedStories.length > 0 && (
             <details className="done-section">

@@ -118,3 +118,7 @@ Go backend + React frontend フルスタック実装、embed.FS で単一バイ�
 - **自動完了**: `refreshPRStates()` に全タスク merged 時のストーリー自動完了ロジックを追加
 - **LLM プロンプト**: `formatStories` で依存情報・PR URL を正しく出力するよう修正（Phase 2c''' 部分対応）
 - **フロントエンド**: リポジトリフィルターを `task.pr_url` ベースに変更、1タスクストーリー用スリムUI（`SingleTaskPRRow`）追加（PR リンク＋状態＋レビュー決定を横並び表示）
+
+### 2026-04-14: 単一タスクストーリーの CLOSED PR 自動アーカイブ
+
+`refreshPRStates()` と `handleRefreshTaskPR()` に、単一タスクストーリーかつそのタスクの PR が CLOSED（マージでなくクローズ）された場合にストーリーを自動アーカイブするロジックを追加。`allMerged` による自動完了チェックより優先して評価される。

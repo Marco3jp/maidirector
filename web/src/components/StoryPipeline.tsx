@@ -24,7 +24,7 @@ function formatSnoozedUntil(snoozedUntil: string | null): string | null {
   return `${diffD}日後に復帰`;
 }
 
-function extractRepoName(link: string): string | null {
+export function extractRepoName(link: string): string | null {
   try {
     const url = new URL(link);
     if (url.hostname !== 'github.com') return null;
@@ -104,6 +104,8 @@ interface Props {
   onRefresh: () => void;
   collapseSignal?: number;
   expandSignal?: number;
+  hiddenRepos?: Set<string>;
+  onHiddenReposChange?: (next: Set<string>) => void;
 }
 
 const URL_RE = /https?:\/\/[^\s]+/g;
@@ -127,7 +129,7 @@ function renderDescription(text: string) {
   return parts;
 }
 
-export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal }: Props) {
+export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal, hiddenRepos: hiddenReposProp, onHiddenReposChange }: Props) {
   const [chains, setChains] = useState<LayerChain[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [contextId, setContextId] = useState<string | null>(null);
@@ -136,20 +138,10 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
   const [editingDescriptionId, setEditingDescriptionId] = useState<string | null>(null);
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [contextEntriesMap, setContextEntriesMap] = useState<Record<string, ContextEntry[]>>({});
-  const [hiddenRepos, setHiddenRepos] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem('maidirector:hiddenRepos');
-      return saved ? new Set<string>(JSON.parse(saved)) : new Set<string>();
-    } catch {
-      return new Set<string>();
-    }
-  });
+  const hiddenRepos = hiddenReposProp ?? new Set<string>();
 
   const updateHiddenRepos = (next: Set<string>) => {
-    setHiddenRepos(next);
-    try {
-      localStorage.setItem('maidirector:hiddenRepos', JSON.stringify([...next]));
-    } catch { /* ignore */ }
+    onHiddenReposChange?.(next);
   };
 
   useEffect(() => {
@@ -358,16 +350,13 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
   )].sort();
 
   const toggleHiddenRepo = (repo: string) => {
-    setHiddenRepos((prev) => {
-      const next = new Set(prev);
-      if (next.has(repo)) {
-        next.delete(repo);
-      } else {
-        next.add(repo);
-      }
-      updateHiddenRepos(next);
-      return next;
-    });
+    const next = new Set(hiddenRepos);
+    if (next.has(repo)) {
+      next.delete(repo);
+    } else {
+      next.add(repo);
+    }
+    updateHiddenRepos(next);
   };
 
   const filteredStories = stories.filter((s) => {

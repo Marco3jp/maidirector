@@ -457,11 +457,19 @@ func (s *Server) handleRefreshTaskPR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if existing.PRIsDraft != prevIsDraft {
-		story, err := s.storySvc.Get(existing.StoryID)
-		if err == nil && adjustDraftPriority(story, existing.PRIsDraft) {
+	story, err := s.storySvc.Get(existing.StoryID)
+	if err == nil {
+		storyChanged := false
+		if existing.PRIsDraft != prevIsDraft && adjustDraftPriority(story, existing.PRIsDraft) {
+			storyChanged = true
+		}
+		if story.Status == task.StoryStatusActive && len(story.Tasks) == 1 && existing.PRState == "CLOSED" {
+			story.Status = task.StoryStatusArchived
+			storyChanged = true
+		}
+		if storyChanged {
 			if err := s.storySvc.Update(story); err != nil {
-				log.Printf("warning: failed to update story priority for draft change %s: %v", story.ID, err)
+				log.Printf("warning: failed to update story %s: %v", story.ID, err)
 			}
 		}
 	}
@@ -539,7 +547,10 @@ func (s *Server) refreshPRStates() {
 				}
 			}
 		}
-		if allMerged && story.Status == task.StoryStatusActive {
+		if story.Status == task.StoryStatusActive && len(story.Tasks) == 1 && story.Tasks[0].PRState == "CLOSED" {
+			story.Status = task.StoryStatusArchived
+			storyNeedsUpdate = true
+		} else if allMerged && story.Status == task.StoryStatusActive {
 			story.Status = task.StoryStatusCompleted
 			storyNeedsUpdate = true
 		}
