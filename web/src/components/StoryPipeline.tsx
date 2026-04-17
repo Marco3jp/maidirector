@@ -300,11 +300,35 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
   };
 
   const handleDeleteTask = async (storyId: string, taskId: string) => {
+    if (!confirm('このタスクを削除しますか？')) return;
     try {
       await api.deleteTask(storyId, taskId);
       onRefresh();
     } catch (e) {
       console.error('Failed to delete task:', e);
+    }
+  };
+
+  const handleMoveTask = async (story: Story, taskId: string, direction: 'up' | 'down') => {
+    const tasks = [...story.tasks];
+    const idx = tasks.findIndex((t) => t.id === taskId);
+    if (idx < 0) return;
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= tasks.length) return;
+
+    const aOrder = tasks[idx].sort_order;
+    const bOrder = tasks[swapIdx].sort_order;
+    const newAOrder = aOrder === bOrder ? (direction === 'up' ? aOrder - 1 : aOrder + 1) : bOrder;
+    const newBOrder = aOrder === bOrder ? aOrder : aOrder;
+
+    try {
+      await Promise.all([
+        api.updateTask(story.id, tasks[idx].id, { ...tasks[idx], sort_order: newAOrder }),
+        api.updateTask(story.id, tasks[swapIdx].id, { ...tasks[swapIdx], sort_order: newBOrder }),
+      ]);
+      onRefresh();
+    } catch (e) {
+      console.error('Failed to move task:', e);
     }
   };
 
@@ -654,6 +678,7 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
                 missingLayers={missingLayers}
                 onAddTask={handleAddTask}
                 onDeleteTask={handleDeleteTask}
+                onMoveTask={(taskId, dir) => handleMoveTask(story, taskId, dir)}
                 onAddDep={handleAddDep}
                 onRemoveDep={handleRemoveDep}
               />
@@ -1001,6 +1026,7 @@ function TaskManager({
   missingLayers,
   onAddTask,
   onDeleteTask,
+  onMoveTask,
   onAddDep,
   onRemoveDep,
 }: {
@@ -1008,6 +1034,7 @@ function TaskManager({
   missingLayers: string[];
   onAddTask: (storyId: string, taskName: string) => void;
   onDeleteTask: (storyId: string, taskId: string) => void;
+  onMoveTask: (taskId: string, direction: 'up' | 'down') => void;
   onAddDep: (storyId: string, taskId: string, dependsOnId: string) => void;
   onRemoveDep: (storyId: string, taskId: string, depId: string) => void;
 }) {
@@ -1052,7 +1079,7 @@ function TaskManager({
 
       {story.tasks.length > 0 && (
         <div className="layer-list-manage">
-          {story.tasks.map((t) => {
+          {story.tasks.map((t, idx) => {
             const depTasks = story.tasks.filter((other) => t.depends_on.includes(other.id));
             const availableForDep = story.tasks.filter(
               (other) => other.id !== t.id && !t.depends_on.includes(other.id),
@@ -1060,6 +1087,24 @@ function TaskManager({
             return (
               <div key={t.id} className="layer-manage-item">
                 <div className="layer-manage-main">
+                  <div className="layer-manage-order-btns">
+                    <button
+                      className="btn-icon"
+                      onClick={() => onMoveTask(t.id, 'up')}
+                      disabled={idx === 0}
+                      title="上に移動"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      className="btn-icon"
+                      onClick={() => onMoveTask(t.id, 'down')}
+                      disabled={idx === story.tasks.length - 1}
+                      title="下に移動"
+                    >
+                      ▼
+                    </button>
+                  </div>
                   <span>{t.name}</span>
                   {t.pr_url && (
                     <span className="layer-manage-pr">

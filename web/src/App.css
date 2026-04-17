@@ -1204,6 +1204,29 @@ button:disabled {
   gap: 8px;
 }
 
+.layer-manage-order-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.layer-manage-order-btns .btn-icon {
+  padding: 0 3px;
+  font-size: 9px;
+  line-height: 1.4;
+  opacity: 0.6;
+}
+
+.layer-manage-order-btns .btn-icon:disabled {
+  opacity: 0.2;
+  cursor: default;
+}
+
+.layer-manage-order-btns .btn-icon:not(:disabled):hover {
+  opacity: 1;
+}
+
 .layer-manage-deps {
   display: flex;
   flex-wrap: wrap;
