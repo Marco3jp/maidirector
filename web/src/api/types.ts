@@ -1,5 +1,5 @@
 export type StoryStatus = 'active' | 'completed' | 'archived';
-export type TaskStatus = 'pending' | 'in_progress' | 'review' | 'merged';
+export type TaskStatus = 'pending' | 'in_progress' | 'review' | 'merged' | 'released';
 
 export interface Story {
   id: string;
@@ -29,6 +29,9 @@ export interface StoryTask {
   pr_review_decision: string;
   pr_is_draft: boolean;
   pr_check_status: string;
+  pr_head_ref_name: string;
+  pr_updated_at: string;
+  pr_released: boolean;
   sort_order: number;
   depends_on: string[];
   created_at: string;

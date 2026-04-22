@@ -493,8 +493,15 @@ func (s *Server) applyPRInfo(t *task.StoryTask) {
 	t.PRReviewDecision = info.ReviewDecision
 	t.PRIsDraft = info.IsDraft
 	t.PRCheckStatus = info.CheckStatus
-	if info.State == "MERGED" && t.Status != task.TaskStatusMerged {
-		t.Status = task.TaskStatusMerged
+	t.PRHeadRefName = info.HeadRefName
+	t.PRUpdatedAt = info.UpdatedAt
+	t.PRReleased = info.Released
+	if info.State == "MERGED" {
+		if info.Released && t.Status != task.TaskStatusReleased {
+			t.Status = task.TaskStatusReleased
+		} else if !info.Released && t.Status != task.TaskStatusMerged && t.Status != task.TaskStatusReleased {
+			t.Status = task.TaskStatusMerged
+		}
 	}
 }
 
@@ -518,18 +525,31 @@ func (s *Server) refreshPRStates() {
 	if s.ghClient == nil {
 		return
 	}
-	stories, err := s.storySvc.List("active")
+	activeStories, err := s.storySvc.List("active")
 	if err != nil {
 		log.Printf("warning: failed to list stories for PR refresh: %v", err)
 		return
 	}
+	completedStories, err := s.storySvc.List("completed")
+	if err != nil {
+		log.Printf("warning: failed to list completed stories for PR refresh: %v", err)
+	}
+	stories := append(activeStories, completedStories...)
 	for _, story := range stories {
 		allMerged := len(story.Tasks) > 0
 		storyNeedsUpdate := false
 		for _, t := range story.Tasks {
-			if t.PRUrl == "" || t.Status == task.TaskStatusMerged {
-				if t.Status != task.TaskStatusMerged {
-					allMerged = false
+			if t.PRUrl == "" {
+				allMerged = false
+				continue
+			}
+			if t.Status == task.TaskStatusReleased {
+				continue
+			}
+			if t.Status == task.TaskStatusMerged {
+				s.applyPRInfo(t)
+				if err := s.storySvc.UpdateTask(t); err != nil {
+					log.Printf("warning: failed to update task after PR refresh: %v", err)
 				}
 				continue
 			}
@@ -538,7 +558,7 @@ func (s *Server) refreshPRStates() {
 			if err := s.storySvc.UpdateTask(t); err != nil {
 				log.Printf("warning: failed to update task after PR refresh: %v", err)
 			}
-			if t.Status != task.TaskStatusMerged {
+			if t.Status != task.TaskStatusMerged && t.Status != task.TaskStatusReleased {
 				allMerged = false
 			}
 			if t.PRIsDraft != prevIsDraft {

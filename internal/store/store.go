@@ -148,6 +148,9 @@ func (s *Store) migrate() error {
 			FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_story_tasks_story_id ON story_tasks(story_id)`,
+		`ALTER TABLE story_tasks ADD COLUMN pr_head_ref_name TEXT DEFAULT ''`,
+		`ALTER TABLE story_tasks ADD COLUMN pr_updated_at DATETIME`,
+		`ALTER TABLE story_tasks ADD COLUMN pr_released INTEGER DEFAULT 0`,
 		// Phase 3: task_dependencies テーブル（任意依存関係の DAG）
 		`CREATE TABLE IF NOT EXISTS task_dependencies (
 			task_id TEXT NOT NULL,
@@ -693,9 +696,9 @@ func (s *Store) CreateStoryTask(t *task.StoryTask) error {
 	}
 
 	_, err := s.db.Exec(
-		`INSERT INTO story_tasks (id, story_id, name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, sort_order, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.ID, t.StoryID, t.Name, t.Status, t.PRUrl, t.PRNumber, t.PRState, t.PRTitle, t.PRReviewDecision, boolToInt(t.PRIsDraft), t.PRCheckStatus, t.SortOrder, t.CreatedAt, t.UpdatedAt,
+		`INSERT INTO story_tasks (id, story_id, name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, pr_head_ref_name, pr_updated_at, pr_released, sort_order, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.StoryID, t.Name, t.Status, t.PRUrl, t.PRNumber, t.PRState, t.PRTitle, t.PRReviewDecision, boolToInt(t.PRIsDraft), t.PRCheckStatus, t.PRHeadRefName, nullableTime(t.PRUpdatedAt), boolToInt(t.PRReleased), t.SortOrder, t.CreatedAt, t.UpdatedAt,
 	)
 	if err != nil {
 		return err
@@ -707,7 +710,7 @@ func (s *Store) CreateStoryTask(t *task.StoryTask) error {
 
 func (s *Store) GetStoryTask(id string) (*task.StoryTask, error) {
 	row := s.db.QueryRow(
-		`SELECT id, story_id, name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, sort_order, created_at, updated_at
+		`SELECT id, story_id, name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, pr_head_ref_name, pr_updated_at, pr_released, sort_order, created_at, updated_at
 		 FROM story_tasks WHERE id = ?`, id,
 	)
 	t, err := scanStoryTask(row)
@@ -728,7 +731,7 @@ func (s *Store) GetStoryTask(id string) (*task.StoryTask, error) {
 
 func (s *Store) ListStoryTasks(storyID string) ([]*task.StoryTask, error) {
 	rows, err := s.db.Query(
-		`SELECT id, story_id, name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, sort_order, created_at, updated_at
+		`SELECT id, story_id, name, status, pr_url, pr_number, pr_state, pr_title, pr_review_decision, pr_is_draft, pr_check_status, pr_head_ref_name, pr_updated_at, pr_released, sort_order, created_at, updated_at
 		 FROM story_tasks WHERE story_id = ? ORDER BY sort_order ASC`, storyID,
 	)
 	if err != nil {
@@ -769,8 +772,8 @@ func (s *Store) ListStoryTasks(storyID string) ([]*task.StoryTask, error) {
 func (s *Store) UpdateStoryTask(t *task.StoryTask) error {
 	t.UpdatedAt = time.Now()
 	_, err := s.db.Exec(
-		`UPDATE story_tasks SET name=?, status=?, pr_url=?, pr_number=?, pr_state=?, pr_title=?, pr_review_decision=?, pr_is_draft=?, pr_check_status=?, sort_order=?, updated_at=? WHERE id=?`,
-		t.Name, t.Status, t.PRUrl, t.PRNumber, t.PRState, t.PRTitle, t.PRReviewDecision, boolToInt(t.PRIsDraft), t.PRCheckStatus, t.SortOrder, t.UpdatedAt, t.ID,
+		`UPDATE story_tasks SET name=?, status=?, pr_url=?, pr_number=?, pr_state=?, pr_title=?, pr_review_decision=?, pr_is_draft=?, pr_check_status=?, pr_head_ref_name=?, pr_updated_at=?, pr_released=?, sort_order=?, updated_at=? WHERE id=?`,
+		t.Name, t.Status, t.PRUrl, t.PRNumber, t.PRState, t.PRTitle, t.PRReviewDecision, boolToInt(t.PRIsDraft), t.PRCheckStatus, t.PRHeadRefName, nullableTime(t.PRUpdatedAt), boolToInt(t.PRReleased), t.SortOrder, t.UpdatedAt, t.ID,
 	)
 	if err != nil {
 		return err
@@ -895,11 +898,24 @@ func (s *Store) FindStoryByPRURL(prURL string) (string, error) {
 func scanStoryTask(sc scannable) (*task.StoryTask, error) {
 	t := &task.StoryTask{}
 	var isDraft int
-	if err := sc.Scan(&t.ID, &t.StoryID, &t.Name, &t.Status, &t.PRUrl, &t.PRNumber, &t.PRState, &t.PRTitle, &t.PRReviewDecision, &isDraft, &t.PRCheckStatus, &t.SortOrder, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	var released int
+	var prUpdatedAt sql.NullTime
+	if err := sc.Scan(&t.ID, &t.StoryID, &t.Name, &t.Status, &t.PRUrl, &t.PRNumber, &t.PRState, &t.PRTitle, &t.PRReviewDecision, &isDraft, &t.PRCheckStatus, &t.PRHeadRefName, &prUpdatedAt, &released, &t.SortOrder, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
 	t.PRIsDraft = isDraft != 0
+	t.PRReleased = released != 0
+	if prUpdatedAt.Valid {
+		t.PRUpdatedAt = prUpdatedAt.Time
+	}
 	return t, nil
+}
+
+func nullableTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
 }
 
 func boolToInt(b bool) int {

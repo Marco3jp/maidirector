@@ -39,6 +39,7 @@ const (
 	TaskStatusInProgress TaskStatus = "in_progress"
 	TaskStatusReview     TaskStatus = "review"
 	TaskStatusMerged     TaskStatus = "merged"
+	TaskStatusReleased   TaskStatus = "released"
 )
 
 type Story struct {
@@ -69,6 +70,9 @@ type StoryTask struct {
 	PRReviewDecision string     `json:"pr_review_decision"`
 	PRIsDraft        bool       `json:"pr_is_draft"`
 	PRCheckStatus    string     `json:"pr_check_status"`
+	PRHeadRefName    string     `json:"pr_head_ref_name"`
+	PRUpdatedAt      time.Time  `json:"pr_updated_at"`
+	PRReleased       bool       `json:"pr_released"`
 	SortOrder        int        `json:"sort_order"`
 	DependsOn        []string   `json:"depends_on"`
 	CreatedAt        time.Time  `json:"created_at"`

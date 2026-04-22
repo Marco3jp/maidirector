@@ -3,6 +3,8 @@ package github
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -11,14 +13,18 @@ import (
 )
 
 type PRInfo struct {
-	Number         int    `json:"number"`
-	Title          string `json:"title"`
-	State          string `json:"state"`
-	IsDraft        bool   `json:"isDraft"`
-	Mergeable      string `json:"mergeable"`
-	ReviewDecision string `json:"reviewDecision"`
-	CheckStatus    string `json:"checkStatus"`
-	URL            string `json:"url"`
+	Number         int       `json:"number"`
+	Title          string    `json:"title"`
+	State          string    `json:"state"`
+	IsDraft        bool      `json:"isDraft"`
+	Mergeable      string    `json:"mergeable"`
+	ReviewDecision string    `json:"reviewDecision"`
+	CheckStatus    string    `json:"checkStatus"`
+	URL            string    `json:"url"`
+	HeadRefName    string    `json:"headRefName"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+	MergeCommitSHA string    `json:"mergeCommitSha"`
+	Released       bool      `json:"released"`
 }
 
 type checkRollupItem struct {
@@ -27,15 +33,22 @@ type checkRollupItem struct {
 	State      string `json:"state"`
 }
 
+type ghMergeCommit struct {
+	OID string `json:"oid"`
+}
+
 type ghRawResponse struct {
-	Number             int               `json:"number"`
-	Title              string            `json:"title"`
-	State              string            `json:"state"`
-	IsDraft            bool              `json:"isDraft"`
-	Mergeable          string            `json:"mergeable"`
-	ReviewDecision     string            `json:"reviewDecision"`
-	URL                string            `json:"url"`
-	StatusCheckRollup  []checkRollupItem `json:"statusCheckRollup"`
+	Number            int               `json:"number"`
+	Title             string            `json:"title"`
+	State             string            `json:"state"`
+	IsDraft           bool              `json:"isDraft"`
+	Mergeable         string            `json:"mergeable"`
+	ReviewDecision    string            `json:"reviewDecision"`
+	URL               string            `json:"url"`
+	HeadRefName       string            `json:"headRefName"`
+	UpdatedAt         time.Time         `json:"updatedAt"`
+	MergeCommit       *ghMergeCommit    `json:"mergeCommit"`
+	StatusCheckRollup []checkRollupItem `json:"statusCheckRollup"`
 }
 
 type Client struct{}
@@ -46,7 +59,7 @@ func NewClient() *Client {
 
 func (c *Client) GetPRInfo(prURL string) (*PRInfo, error) {
 	cmd := exec.Command("gh", "pr", "view", prURL,
-		"--json", "number,title,state,isDraft,mergeable,reviewDecision,url,statusCheckRollup")
+		"--json", "number,title,state,isDraft,mergeable,reviewDecision,url,statusCheckRollup,headRefName,updatedAt,mergeCommit")
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -61,7 +74,12 @@ func (c *Client) GetPRInfo(prURL string) (*PRInfo, error) {
 		return nil, fmt.Errorf("failed to parse gh output: %w", err)
 	}
 
-	return &PRInfo{
+	mergeSHA := ""
+	if raw.MergeCommit != nil {
+		mergeSHA = raw.MergeCommit.OID
+	}
+
+	info := &PRInfo{
 		Number:         raw.Number,
 		Title:          raw.Title,
 		State:          raw.State,
@@ -70,7 +88,110 @@ func (c *Client) GetPRInfo(prURL string) (*PRInfo, error) {
 		ReviewDecision: raw.ReviewDecision,
 		CheckStatus:    summarizeChecks(raw.StatusCheckRollup),
 		URL:            raw.URL,
-	}, nil
+		HeadRefName:    raw.HeadRefName,
+		UpdatedAt:      raw.UpdatedAt,
+		MergeCommitSHA: mergeSHA,
+	}
+
+	if raw.State == "MERGED" && mergeSHA != "" {
+		if owner, repo, _, ok := ParsePRURL(prURL); ok {
+			released, err := c.checkReleased(owner, repo, mergeSHA)
+			if err != nil {
+				fmt.Fprintf(logWriter, "warning: checkReleased failed for %s: %v\n", prURL, err)
+			}
+			info.Released = released
+		}
+	}
+
+	return info, nil
+}
+
+// logWriter はリリース判定関連のログ出力先。デフォルトは stderr。
+var logWriter io.Writer = os.Stderr
+
+// checkReleased はマージコミット以降に新しいタグが存在するかを GraphQL で判定する。
+// refs を TAG_COMMIT_DATE DESC で取得するので、REST /tags の順序不定問題を回避できる。
+func (c *Client) checkReleased(owner, repo, mergeSHA string) (bool, error) {
+	query := `query($owner: String!, $name: String!, $oid: GitObjectID!) {
+		repository(owner: $owner, name: $name) {
+			object(oid: $oid) {
+				... on Commit { committedDate }
+			}
+			refs(refPrefix: "refs/tags/", first: 1, orderBy: {field: TAG_COMMIT_DATE, direction: DESC}) {
+				nodes {
+					name
+					target {
+						__typename
+						... on Commit { committedDate oid }
+						... on Tag { target { ... on Commit { committedDate oid } } }
+					}
+				}
+			}
+		}
+	}`
+
+	cmd := exec.Command("gh", "api", "graphql",
+		"-f", "query="+query,
+		"-f", "owner="+owner,
+		"-f", "name="+repo,
+		"-f", "oid="+mergeSHA,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return false, fmt.Errorf("gh api graphql failed: %s", string(exitErr.Stderr))
+		}
+		return false, fmt.Errorf("gh api graphql failed: %w", err)
+	}
+
+	var resp struct {
+		Data struct {
+			Repository struct {
+				Object struct {
+					CommittedDate time.Time `json:"committedDate"`
+				} `json:"object"`
+				Refs struct {
+					Nodes []struct {
+						Name   string `json:"name"`
+						Target struct {
+							Typename      string    `json:"__typename"`
+							CommittedDate time.Time `json:"committedDate"`
+							OID           string    `json:"oid"`
+							Target        struct {
+								CommittedDate time.Time `json:"committedDate"`
+								OID           string    `json:"oid"`
+							} `json:"target"`
+						} `json:"target"`
+					} `json:"nodes"`
+				} `json:"refs"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return false, fmt.Errorf("failed to parse graphql response: %w", err)
+	}
+
+	mergeDate := resp.Data.Repository.Object.CommittedDate
+	if mergeDate.IsZero() {
+		return false, fmt.Errorf("merge commit %s not found", mergeSHA)
+	}
+
+	nodes := resp.Data.Repository.Refs.Nodes
+	if len(nodes) == 0 {
+		return false, nil
+	}
+	tagTarget := nodes[0].Target
+	tagDate := tagTarget.CommittedDate
+	tagOID := tagTarget.OID
+	if tagTarget.Typename == "Tag" {
+		tagDate = tagTarget.Target.CommittedDate
+		tagOID = tagTarget.Target.OID
+	}
+
+	if tagOID == mergeSHA {
+		return true, nil
+	}
+	return tagDate.After(mergeDate), nil
 }
 
 func summarizeChecks(checks []checkRollupItem) string {

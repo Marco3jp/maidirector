@@ -10,6 +10,49 @@ const SNOOZE_OPTIONS: { label: string; value: SnoozeDuration }[] = [
   { label: '来週まで（月 09:00）', value: 'next_week' },
 ];
 
+function formatPRUpdatedAt(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime()) || d.getFullYear() < 2000) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function formatPRUpdatedAtFull(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime()) || d.getFullYear() < 2000) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function BranchCopyChip({ branch, compact = false }: { branch: string; compact?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  if (!branch) return null;
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(branch);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error('failed to copy branch name:', err);
+    }
+  };
+  return (
+    <button
+      type="button"
+      className={`branch-copy-chip ${compact ? 'compact' : ''} ${copied ? 'copied' : ''}`}
+      onClick={handleCopy}
+      title={copied ? 'コピーしました' : `ブランチ名をコピー: ${branch}`}
+    >
+      <span className="branch-copy-chip-name">{branch}</span>
+      <span className="branch-copy-chip-icon">{copied ? '✓' : '⧉'}</span>
+    </button>
+  );
+}
+
 function formatSnoozedUntil(snoozedUntil: string | null): string | null {
   if (!snoozedUntil) return null;
   const until = new Date(snoozedUntil);
@@ -41,13 +84,15 @@ const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   in_progress: '作業中',
   review: 'レビュー中',
   merged: 'マージ済',
+  released: 'リリース済',
 };
 
 const TASK_STATUS_COLORS: Record<TaskStatus, string> = {
   pending: '#6b7280',
   in_progress: '#3b82f6',
   review: '#f59e0b',
-  merged: '#22c55e',
+  merged: '#8b5cf6',
+  released: '#7c3aed',
 };
 
 const STORY_STATUS_LABELS: Record<StoryStatus, string> = {
@@ -85,6 +130,9 @@ function getPRStatusLabel(t: StoryTask): { label: string; color: string; classNa
     return { label: '未着手', color: '#6b7280', className: 'pipeline-pr-state-none' };
   }
   if (t.pr_state === 'MERGED') {
+    if (t.pr_released) {
+      return { label: 'リリース済み', color: '#8b5cf6', className: 'pipeline-pr-state-merged pipeline-pr-state-released' };
+    }
     return { label: 'マージ済み', color: '#8b5cf6', className: 'pipeline-pr-state-merged' };
   }
   if (t.pr_is_draft) {
@@ -138,6 +186,17 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
   const [editingDescriptionId, setEditingDescriptionId] = useState<string | null>(null);
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [contextEntriesMap, setContextEntriesMap] = useState<Record<string, ContextEntry[]>>({});
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>(() => {
+    const saved = typeof window !== 'undefined' ? window.localStorage.getItem('story_sort_order') : null;
+    return saved === 'asc' ? 'asc' : 'desc';
+  });
+  const handleToggleSortOrder = () => {
+    setSortOrder((prev) => {
+      const next = prev === 'desc' ? 'asc' : 'desc';
+      try { window.localStorage.setItem('story_sort_order', next); } catch { /* ignore */ }
+      return next;
+    });
+  };
   const hiddenRepos = hiddenReposProp ?? new Set<string>();
 
   const updateHiddenRepos = (next: Set<string>) => {
@@ -363,7 +422,7 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
     const taskById = Object.fromEntries(story.tasks.map((s) => [s.id, s]));
     return t.depends_on.some((depId) => {
       const dep = taskById[depId];
-      return dep ? dep.status !== 'merged' : false;
+      return dep ? dep.status !== 'merged' && dep.status !== 'released' : false;
     });
   };
 
@@ -390,6 +449,25 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
     return taskRepos.some((r) => !hiddenRepos.has(r));
   });
 
+  const now = Date.now();
+  const isStorySnoozed = (s: Story): boolean =>
+    s.snoozed_until ? new Date(s.snoozed_until).getTime() > now : false;
+  const sortedStories = [...filteredStories].sort((a, b) => {
+    const sa = isStorySnoozed(a) ? 1 : 0;
+    const sb = isStorySnoozed(b) ? 1 : 0;
+    if (sa !== sb) return sa - sb;
+    const pa = a.priority === 0 ? 999 : a.priority;
+    const pb = b.priority === 0 ? 999 : b.priority;
+    if (pa !== pb) return pa - pb;
+    const am = a.tasks.length > 1 ? 0 : 1;
+    const bm = b.tasks.length > 1 ? 0 : 1;
+    if (am !== bm) return am - bm;
+    if (am === 0) return 0;
+    const au = a.tasks[0]?.pr_updated_at ? new Date(a.tasks[0].pr_updated_at).getTime() : 0;
+    const bu = b.tasks[0]?.pr_updated_at ? new Date(b.tasks[0].pr_updated_at).getTime() : 0;
+    return sortOrder === 'desc' ? bu - au : au - bu;
+  });
+
   if (stories.length === 0) {
     return <div className="empty-state">ストーリーがありません。新しいストーリーを追加してみましょう。</div>;
   }
@@ -397,6 +475,14 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
   return (
     <div className="story-list">
       <div className="story-list-toolbar">
+        <button
+          type="button"
+          className="story-sort-toggle"
+          onClick={handleToggleSortOrder}
+          title="同じ優先順位内のシングルタスクをPR最終更新日でソート"
+        >
+          {sortOrder === 'desc' ? '新しい順 ▼' : '古い順 ▲'}
+        </button>
         {repoNames.length > 0 && (
           <div className="repo-filter-chips">
             {repoNames.map((repo) => {
@@ -427,7 +513,7 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
           </div>
         )}
       </div>
-      {filteredStories.map((story) => {
+      {sortedStories.map((story) => {
         const chainLayers = getChainLayers(story.layer_chain);
         const existingNames = new Set(story.tasks.map((t) => t.name));
         const missingLayers = chainLayers.filter((name) => !existingNames.has(name));
@@ -715,9 +801,11 @@ function SingleTaskPRRow({
     const repo = extractRepoName(task.pr_url);
     const num = task.pr_number;
     if (repo && num) return `🔗 ${repo} #${num}`;
-    if (task.pr_title) return `🔗 ${task.pr_title}`;
     return '🔗 PR';
   })();
+  const updatedLabel = formatPRUpdatedAt(task.pr_updated_at);
+  const updatedFull = formatPRUpdatedAtFull(task.pr_updated_at);
+  const isDone = task.pr_state === 'MERGED';
 
   return (
     <div className="story-single-pr-row">
@@ -726,17 +814,25 @@ function SingleTaskPRRow({
           {prLinkLabel}
         </a>
       ) : null}
-      <span className="pipeline-pr-state" style={{ color: prStatus.color }}>
-        {prStatus.label}
-      </span>
-      {task.pr_review_decision && REVIEW_LABELS[task.pr_review_decision] && (
+      <BranchCopyChip branch={task.pr_head_ref_name} compact={isDone} />
+      {!isDone && (
+        <span className="pipeline-pr-state" style={{ color: prStatus.color }}>
+          {prStatus.label}
+        </span>
+      )}
+      {!isDone && task.pr_review_decision && REVIEW_LABELS[task.pr_review_decision] && (
         <span className="pipeline-review-badge" style={{ color: REVIEW_COLORS[task.pr_review_decision] }}>
           {REVIEW_LABELS[task.pr_review_decision]}
         </span>
       )}
-      {ciInfo && (
+      {!isDone && ciInfo && (
         <span style={{ color: ciInfo.color, fontSize: '0.75rem' }}>
           {ciInfo.icon} {ciInfo.label}
+        </span>
+      )}
+      {updatedLabel && (
+        <span className="story-single-pr-updated" title={updatedFull}>
+          更新: {updatedLabel}
         </span>
       )}
       {task.pr_url && (
@@ -793,6 +889,7 @@ function PipelineStage({
 
   const prStatus = getPRStatusLabel(task);
   const ciInfo = task.pr_check_status ? CI_STATUS_DISPLAY[task.pr_check_status] : null;
+  const isDone = task.pr_state === 'MERGED';
 
   return (
     <div className={`pipeline-stage ${blocked ? 'pipeline-blocked' : ''}`}>
@@ -811,9 +908,11 @@ function PipelineStage({
           {TASK_STATUS_LABELS[task.status]}
         </span>
 
-        <span className={`pipeline-pr-state ${prStatus.className}`} style={{ color: prStatus.color }}>
-          {prStatus.label}
-        </span>
+        {!isDone && (
+          <span className={`pipeline-pr-state ${prStatus.className}`} style={{ color: prStatus.color }}>
+            {prStatus.label}
+          </span>
+        )}
 
         {task.pr_url ? (
           <div className="pipeline-pr-info">
@@ -835,13 +934,13 @@ function PipelineStage({
                 {refreshing ? '...' : '↻'}
               </button>
             </div>
-            {task.pr_title && (
-              <div className="pipeline-pr-title" title={task.pr_title}>
-                {task.pr_title.length > 30 ? task.pr_title.slice(0, 30) + '…' : task.pr_title}
+            {task.pr_head_ref_name && (
+              <div className="pipeline-pr-branch">
+                <BranchCopyChip branch={task.pr_head_ref_name} compact={isDone} />
               </div>
             )}
             <div className="pipeline-pr-meta">
-              {task.pr_review_decision && (
+              {!isDone && task.pr_review_decision && (
                 <span
                   className="pipeline-pr-review"
                   style={{ color: REVIEW_COLORS[task.pr_review_decision] || 'var(--text-muted)' }}
@@ -849,9 +948,14 @@ function PipelineStage({
                   {REVIEW_LABELS[task.pr_review_decision] || task.pr_review_decision}
                 </span>
               )}
-              {ciInfo && (
+              {!isDone && ciInfo && (
                 <span className="pipeline-ci-status" style={{ color: ciInfo.color }}>
                   {ciInfo.icon} {ciInfo.label}
+                </span>
+              )}
+              {formatPRUpdatedAt(task.pr_updated_at) && (
+                <span className="pipeline-pr-updated" title={formatPRUpdatedAtFull(task.pr_updated_at)}>
+                  更新: {formatPRUpdatedAt(task.pr_updated_at)}
                 </span>
               )}
             </div>
@@ -890,6 +994,7 @@ function PipelineStage({
           <option value="in_progress">作業中</option>
           <option value="review">レビュー中</option>
           <option value="merged">マージ済</option>
+          <option value="released">リリース済</option>
         </select>
       </div>
     </div>
