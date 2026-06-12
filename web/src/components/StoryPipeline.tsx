@@ -268,7 +268,7 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
   useEffect(() => {
     stories.forEach((story) => fetchContextEntries(story.id));
   // stories の変化だけを監視する意図的な依存リスト
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [stories]);
 
   const handleContextPanelToggle = (storyId: string) => {
@@ -940,24 +940,28 @@ function PipelineStage({
               </div>
             )}
             <div className="pipeline-pr-meta">
-              {!isDone && task.pr_review_decision && (
-                <span
-                  className="pipeline-pr-review"
-                  style={{ color: REVIEW_COLORS[task.pr_review_decision] || 'var(--text-muted)' }}
-                >
-                  {REVIEW_LABELS[task.pr_review_decision] || task.pr_review_decision}
-                </span>
-              )}
-              {!isDone && ciInfo && (
-                <span className="pipeline-ci-status" style={{ color: ciInfo.color }}>
-                  {ciInfo.icon} {ciInfo.label}
-                </span>
-              )}
-              {formatPRUpdatedAt(task.pr_updated_at) && (
-                <span className="pipeline-pr-updated" title={formatPRUpdatedAtFull(task.pr_updated_at)}>
-                  更新: {formatPRUpdatedAt(task.pr_updated_at)}
-                </span>
-              )}
+              <div>
+                {!isDone && task.pr_review_decision && (
+                  <span
+                    className="pipeline-pr-review"
+                    style={{color: REVIEW_COLORS[task.pr_review_decision] || 'var(--text-muted)'}}
+                  >
+                    {REVIEW_LABELS[task.pr_review_decision] || task.pr_review_decision}
+                  </span>
+                )}
+                {!isDone && ciInfo && (
+                  <span className="pipeline-ci-status" style={{color: ciInfo.color}}>
+                    {ciInfo.icon} {ciInfo.label}
+                  </span>
+                )}
+              </div>
+              <div>
+                {formatPRUpdatedAt(task.pr_updated_at) && (
+                  <span className="pipeline-pr-updated" title={formatPRUpdatedAtFull(task.pr_updated_at)}>
+                    PR最終変更: {formatPRUpdatedAt(task.pr_updated_at)}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         ) : (

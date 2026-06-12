@@ -1034,14 +1034,6 @@ button:disabled {
   background: rgba(107, 114, 128, 0.1);
 }
 
-.pipeline-pr-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
 .pipeline-pr-review {
   font-size: 9px;
   font-weight: 600;
