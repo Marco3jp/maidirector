@@ -71,23 +71,9 @@ func (s *Store) migrate() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 		)`,
-		`CREATE TABLE IF NOT EXISTS conversations (
-			id TEXT PRIMARY KEY,
-			role TEXT NOT NULL,
-			content TEXT NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS summaries (
-			id TEXT PRIMARY KEY,
-			scope TEXT NOT NULL,
-			content TEXT NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project)`,
 		`CREATE INDEX IF NOT EXISTS idx_context_entries_task_id ON context_entries(task_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_conversations_created_at ON conversations(created_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_summaries_scope ON summaries(scope)`,
 		`CREATE TABLE IF NOT EXISTS stories (
 			id TEXT PRIMARY KEY,
 			title TEXT NOT NULL,
@@ -514,69 +500,6 @@ func (s *Store) UpdateContextEntry(e *task.ContextEntry) error {
 		e.Content, e.EntryType, e.ID,
 	)
 	return err
-}
-
-// --- Conversations ---
-
-func (s *Store) CreateConversation(c *task.Conversation) error {
-	c.ID = uuid.New().String()
-	c.CreatedAt = time.Now()
-
-	_, err := s.db.Exec(
-		`INSERT INTO conversations (id, role, content, created_at) VALUES (?, ?, ?, ?)`,
-		c.ID, c.Role, c.Content, c.CreatedAt,
-	)
-	return err
-}
-
-func (s *Store) ListRecentConversations(limit int) ([]*task.Conversation, error) {
-	rows, err := s.db.Query(
-		`SELECT id, role, content, created_at FROM conversations ORDER BY created_at DESC LIMIT ?`,
-		limit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var convs []*task.Conversation
-	for rows.Next() {
-		c := &task.Conversation{}
-		if err := rows.Scan(&c.ID, &c.Role, &c.Content, &c.CreatedAt); err != nil {
-			return nil, err
-		}
-		convs = append(convs, c)
-	}
-	return convs, rows.Err()
-}
-
-// --- Summaries ---
-
-func (s *Store) CreateSummary(sm *task.Summary) error {
-	sm.ID = uuid.New().String()
-	sm.CreatedAt = time.Now()
-
-	_, err := s.db.Exec(
-		`INSERT INTO summaries (id, scope, content, created_at) VALUES (?, ?, ?, ?)`,
-		sm.ID, sm.Scope, sm.Content, sm.CreatedAt,
-	)
-	return err
-}
-
-func (s *Store) GetLatestSummary(scope string) (*task.Summary, error) {
-	row := s.db.QueryRow(
-		`SELECT id, scope, content, created_at FROM summaries WHERE scope = ? ORDER BY created_at DESC LIMIT 1`,
-		scope,
-	)
-	sm := &task.Summary{}
-	err := row.Scan(&sm.ID, &sm.Scope, &sm.Content, &sm.CreatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return sm, nil
 }
 
 // --- Stories ---

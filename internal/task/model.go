@@ -10,20 +10,6 @@ type ContextEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-type Conversation struct {
-	ID        string    `json:"id"`
-	Role      string    `json:"role"` // user, assistant
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-type Summary struct {
-	ID        string    `json:"id"`
-	Scope     string    `json:"scope"` // global, project:{name}, task:{id}
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
 type StoryStatus string
 
 const (

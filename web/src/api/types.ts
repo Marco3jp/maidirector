@@ -66,10 +66,6 @@ export interface LayerChain {
   layers: string[];
 }
 
-export interface ChatRequest {
-  message: string;
-}
-
 export type SnoozeDuration = '30m' | '1h' | '3h' | 'tomorrow' | 'next_week';
 
 export interface ScanOrgPRsResult {

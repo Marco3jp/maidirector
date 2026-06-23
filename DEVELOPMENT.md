@@ -5,41 +5,34 @@
 
 ## Status
 
-- **現在のフェーズ**: Phase 3a 完了、Phase 2c 系改善継続中
-- **次にやること**: Phase 2c'''（Suggest/Chat のレビュー待ち PR 除外判定の完全実装）→ Phase 2d（チャットからのタスク操作）
+- **現在のフェーズ**: Phase 3a 完了、LLM 機能廃止済み
 
 ## Roadmap
 
 ### Phase 1: MVP ✅
-Go backend + React dashboard + Ollama + SQLite + Qdrant。ストーリー CRUD・提案・チャット・セマンティック検索。
+Go backend + React dashboard + SQLite。ストーリー CRUD。
 
 ### Phase 2: 外部連携 + 構造的依存認識
 
-- **Phase 2a** ✅ stories/story_layers CRUD + パイプラインビュー + Suggest/Chat 統合
+- **Phase 2a** ✅ stories/story_layers CRUD + パイプラインビュー
 - **Phase 2b** ✅ GitHub 連携（`gh pr view` ラッパー）。PR 情報自動取得・表示、一括リロード
 - **Phase 2.5** ✅ Task/Story 統合（単タスク = レイヤー 0 個の Story）
 - **Phase 2c** ✅ 組織内 PR スキャン → レビュータスク自動生成（`bot_policy` 設定あり）。PR Merge/Close 時にストーリーを自動完了。`story.links` 廃止、PR URL は `story_tasks.pr_url` で一元管理
 - **Phase 2c'** ✅ スヌーズ機能（30m/1h/3h/明日/来週、ソート最下部、残り時間バッジ）
 - **Phase 2c''** ✅ リポジトリ非表示フィルタ（`task.pr_url` ベース、localStorage 永続化）
-- **Phase 2c'''** 部分対応: `formatStories` で依存情報・PR 情報を LLM に渡すよう改善。Suggest/Chat でのレビュー待ち PR の完全な除外判定は未実装
-- **Phase 2d** 未実装: チャットからのタスク操作（Ollama tool use または `/` コマンド）
 
 ### Phase 3: データモデル進化
 
 - **Phase 3a** ✅ Task Dependency DAG（`story_layers` → `story_tasks` + `task_dependencies`）
-- **Phase 3b** 予定: 音声入力/出力、LLM アップグレード（OpenAI/Anthropic 切替）
 
-### Phase 4: フル統合（将来）
-Slack / Miro / スプレッドシート連携、複数サービス横断タスク推定。
+### LLM 機能の廃止
+Suggest / Chat / セマンティック検索（Ollama + Qdrant 連携）は撤去済み。`internal/llm`, `internal/vectorstore`, `internal/context` および `conversations` / `summaries` テーブルも削除。
 
 ## Architecture
 
 - **Backend**: Go (cmd/ + internal/ パターン、単一バイナリ)
 - **Frontend**: React 19 + Vite SPA（Go embed.FS で同梱）
-- **Chat LLM**: Ollama / qwen2.5:14b（Provider インターフェース抽象化で差替可能）
-- **Embedding**: Ollama / nomic-embed-text（768次元）
 - **DB**: SQLite（modernc.org/sqlite、CGO 不要）
-- **Vector**: Qdrant（localhost:6333、REST API）コレクション名 `maidirector`
 - **GitHub 連携**: gh CLI（OAuth 不要、プライベートリポジトリ対応）
 
 ## Data Model
@@ -76,14 +69,10 @@ settings
 
 context_entries
   id, story_id, content, entry_type (note/progress/blocker), created_at
-
-conversations / summaries  （LLM チャット履歴・サマリー）
 ```
 
 ## Known Issues / TODO
 
-- Phase 2c''': Suggest/Chat でレビュー待ち PR の完全な除外判定が未実装
-- Phase 2d: チャットからのタスク操作が未実装
 - `story_layers` テーブルが残存中 → `story_tasks` 移行確認後に `DROP TABLE story_layers` を追加すること
 
 ## Session Log

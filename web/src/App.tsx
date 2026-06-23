@@ -4,8 +4,6 @@ import { api } from './api/client';
 import { useWebSocket } from './hooks/useWebSocket';
 import { StoryForm } from './components/StoryForm';
 import { StoryPipeline, extractRepoName } from './components/StoryPipeline';
-import { SuggestPanel } from './components/SuggestPanel';
-import { ChatPanel } from './components/ChatPanel';
 import './App.css';
 
 type FilterStatus = '' | StoryStatus;
@@ -13,7 +11,6 @@ type FilterStatus = '' | StoryStatus;
 function App() {
   const [stories, setStories] = useState<Story[]>([]);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('');
-  const [activeTab, setActiveTab] = useState<'suggest' | 'chat'>('suggest');
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
   const [lastScanAt, setLastScanAt] = useState<Date | null>(null);
@@ -201,29 +198,6 @@ function App() {
           {stories.length === 0 && (
             <div className="empty-state">ストーリーがありません</div>
           )}
-        </section>
-
-        <section className="panel panel-ai">
-          <div className="tab-bar">
-            <button
-              className={`tab-btn ${activeTab === 'suggest' ? 'active' : ''}`}
-              onClick={() => setActiveTab('suggest')}
-            >
-              次にやること
-            </button>
-            <button
-              className={`tab-btn ${activeTab === 'chat' ? 'active' : ''}`}
-              onClick={() => setActiveTab('chat')}
-            >
-              チャット
-            </button>
-          </div>
-          <div style={{ display: activeTab === 'suggest' ? 'contents' : 'none' }}>
-            <SuggestPanel />
-          </div>
-          <div style={{ display: activeTab === 'chat' ? 'contents' : 'none' }}>
-            <ChatPanel />
-          </div>
         </section>
       </main>
     </div>

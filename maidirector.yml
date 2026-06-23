@@ -1,18 +1,8 @@
 server:
   port: 20135
 
-llm:
-  provider: ollama
-  chat_model: qwen2.5:14b
-  embedding_model: nomic-embed-text
-  endpoint: http://localhost:11434
-
 store:
   sqlite_path: ~/.maidirector/data.db
-
-qdrant:
-  endpoint: http://localhost:6333
-  collection: maidirector
 
 layer_chains:
   - name: default

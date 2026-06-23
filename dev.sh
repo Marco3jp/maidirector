@@ -2,10 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-QDRANT_COMPOSE_DIR="$(cd "$SCRIPT_DIR/../agent-extended-memory" && pwd)"
 
-QDRANT_PORT=6333
-OLLAMA_PORT=11434
 BACKEND_PORT=20135
 FRONTEND_PORT=5173
 
@@ -43,8 +40,6 @@ header "1. コマンド確認"
 check_command "go"     "brew install go"
 check_command "node"   "brew install node"
 check_command "npm"    "brew install node"
-check_command "docker" "brew install --cask docker"
-check_command "ollama" "brew install ollama"
 check_command "gh"     "brew install gh  →  gh auth login"
 
 if [ ${#MISSING_COMMANDS[@]} -gt 0 ]; then
@@ -54,72 +49,7 @@ if [ ${#MISSING_COMMANDS[@]} -gt 0 ]; then
   exit 1
 fi
 
-header "2. Docker (Qdrant)"
-if ! docker info &>/dev/null; then
-  fail "Docker デーモンが起動していません"
-  warn "Docker Desktop を起動してから再実行してください"
-  exit 1
-fi
-
-QDRANT_RUNNING=$(docker ps --filter "ancestor=qdrant/qdrant" --filter "status=running" -q 2>/dev/null)
-if [ -n "$QDRANT_RUNNING" ]; then
-  skip "Qdrant はすでに起動中 (localhost:${QDRANT_PORT})"
-else
-  QDRANT_STOPPED=$(docker ps -a --filter "ancestor=qdrant/qdrant" --filter "status=exited" -q 2>/dev/null)
-  if [ -n "$QDRANT_STOPPED" ]; then
-    echo -e "  Qdrant コンテナを再起動中..."
-    docker compose -f "$QDRANT_COMPOSE_DIR/docker-compose.yml" up -d qdrant
-  else
-    echo -e "  Qdrant コンテナを新規起動中..."
-    docker compose -f "$QDRANT_COMPOSE_DIR/docker-compose.yml" up -d qdrant
-  fi
-  sleep 2
-  if curl -sf "http://localhost:${QDRANT_PORT}/healthz" &>/dev/null; then
-    ok "Qdrant 起動完了 (localhost:${QDRANT_PORT})"
-  else
-    fail "Qdrant の起動に失敗しました"
-    exit 1
-  fi
-fi
-
-header "3. Ollama"
-if curl -sf "http://localhost:${OLLAMA_PORT}/api/tags" &>/dev/null; then
-  skip "Ollama はすでに起動中 (localhost:${OLLAMA_PORT})"
-else
-  echo -e "  Ollama を起動中..."
-  ollama serve &>/dev/null &
-  OLLAMA_PID=$!
-  for i in {1..10}; do
-    if curl -sf "http://localhost:${OLLAMA_PORT}/api/tags" &>/dev/null; then
-      break
-    fi
-    sleep 1
-  done
-  if curl -sf "http://localhost:${OLLAMA_PORT}/api/tags" &>/dev/null; then
-    ok "Ollama 起動完了 (PID: $OLLAMA_PID)"
-  else
-    fail "Ollama の起動に失敗しました"
-    warn "手動で ollama serve を実行してください"
-    exit 1
-  fi
-fi
-
-INSTALLED_MODELS=$(curl -sf "http://localhost:${OLLAMA_PORT}/api/tags" | python3 -c "import sys,json; [print(m['name'].split(':')[0]+':'+m['name'].split(':')[1] if ':' in m['name'] else m['name']) for m in json.load(sys.stdin).get('models',[])]" 2>/dev/null)
-
-CHAT_MODEL=$(awk '/chat_model:/{print $2}' "$SCRIPT_DIR/maidirector.yml")
-EMBED_MODEL=$(awk '/embedding_model:/{print $2}' "$SCRIPT_DIR/maidirector.yml")
-
-for model in "$CHAT_MODEL" "$EMBED_MODEL"; do
-  if echo "$INSTALLED_MODELS" | grep -qx "$model"; then
-    skip "モデル $model はインストール済み"
-  else
-    echo -e "  モデル $model をダウンロード中 (初回のみ、時間がかかります)..."
-    ollama pull "$model"
-    ok "モデル $model ダウンロード完了"
-  fi
-done
-
-header "4. GitHub CLI"
+header "2. GitHub CLI"
 if gh auth status &>/dev/null 2>&1; then
   GH_USER=$(gh api user --jq .login 2>/dev/null || echo "unknown")
   skip "gh 認証済み (user: $GH_USER)"
@@ -128,7 +58,7 @@ else
   warn "PR連携なしでも maidirector は動作します"
 fi
 
-header "5. npm 依存関係"
+header "3. npm 依存関係"
 LOCK_FILE="$SCRIPT_DIR/web/package-lock.json"
 HASH_FILE="$SCRIPT_DIR/web/node_modules/.package-lock-hash"
 CURRENT_HASH=$(shasum "$LOCK_FILE" | awk '{print $1}')
@@ -142,7 +72,7 @@ else
   ok "npm ci 完了"
 fi
 
-header "6. maidirector 起動"
+header "4. maidirector 起動"
 
 BACKEND_PID=$(lsof -ti:"$BACKEND_PORT" 2>/dev/null || true)
 if [ -n "$BACKEND_PID" ]; then
@@ -185,10 +115,7 @@ echo -e "${GREEN}${BOLD}起動完了!${RESET}"
 echo ""
 echo -e "  ダッシュボード:  ${CYAN}http://localhost:${FRONTEND_PORT}${RESET} (dev) / ${CYAN}http://localhost:${BACKEND_PORT}${RESET} (embed)"
 echo -e "  API:             ${CYAN}http://localhost:${BACKEND_PORT}/api${RESET}"
-echo -e "  Qdrant:          ${CYAN}http://localhost:${QDRANT_PORT}/dashboard${RESET}"
-echo -e "  Ollama:          ${CYAN}http://localhost:${OLLAMA_PORT}${RESET}"
 echo ""
 echo -e "  停止するには:"
 echo -e "    ${YELLOW}lsof -ti:${BACKEND_PORT} | xargs kill   # バックエンド${RESET}"
 echo -e "    ${YELLOW}lsof -ti:${FRONTEND_PORT} | xargs kill   # フロントエンド${RESET}"
-echo -e "    ${YELLOW}# Qdrant/Ollama はそのまま残して OK${RESET}"

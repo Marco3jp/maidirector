@@ -1,7 +1,6 @@
 package api
 
 import (
-	gocontext "context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -12,34 +11,25 @@ import (
 	"time"
 
 	"github.com/Marco3jp/maidirector/internal/config"
-	"github.com/Marco3jp/maidirector/internal/context"
 	"github.com/Marco3jp/maidirector/internal/github"
-	"github.com/Marco3jp/maidirector/internal/llm"
 	"github.com/Marco3jp/maidirector/internal/task"
-	"github.com/Marco3jp/maidirector/internal/vectorstore"
 	"github.com/Marco3jp/maidirector/internal/ws"
 )
 
 type Server struct {
-	cfg         *config.Config
-	storySvc    *task.StoryService
-	ctxMgr      *context.Manager
-	llmClient   llm.Provider
-	vectorStore *vectorstore.VectorStore
-	ghClient    *github.Client
-	wsHub       *ws.Hub
-	httpServer  *http.Server
+	cfg        *config.Config
+	storySvc   *task.StoryService
+	ghClient   *github.Client
+	wsHub      *ws.Hub
+	httpServer *http.Server
 }
 
-func NewServer(cfg *config.Config, storySvc *task.StoryService, ctxMgr *context.Manager, llmClient llm.Provider, vs *vectorstore.VectorStore, ghClient *github.Client, staticFS ...fs.FS) *Server {
+func NewServer(cfg *config.Config, storySvc *task.StoryService, ghClient *github.Client, staticFS ...fs.FS) *Server {
 	s := &Server{
-		cfg:         cfg,
-		storySvc:    storySvc,
-		ctxMgr:      ctxMgr,
-		llmClient:   llmClient,
-		vectorStore: vs,
-		ghClient:    ghClient,
-		wsHub:       ws.NewHub(),
+		cfg:      cfg,
+		storySvc: storySvc,
+		ghClient: ghClient,
+		wsHub:    ws.NewHub(),
 	}
 
 	mux := http.NewServeMux()
@@ -64,9 +54,6 @@ func NewServer(cfg *config.Config, storySvc *task.StoryService, ctxMgr *context.
 	mux.HandleFunc("PUT /api/stories/{id}/context/{entryId}", s.handleUpdateContext)
 	mux.HandleFunc("DELETE /api/stories/{id}/context/{entryId}", s.handleDeleteContext)
 	mux.HandleFunc("GET /api/layer-chains", s.handleGetLayerChains)
-
-	mux.HandleFunc("POST /api/suggest", s.handleSuggest)
-	mux.HandleFunc("POST /api/chat", s.handleChat)
 
 	mux.HandleFunc("GET /ws", s.wsHub.HandleWS)
 
@@ -132,8 +119,6 @@ func (s *Server) handleCreateStory(w http.ResponseWriter, r *http.Request) {
 	} else {
 		st.Tasks = []*task.StoryTask{}
 	}
-
-	go s.vectorizeStory(&st)
 
 	s.wsHub.Broadcast(ws.Message{Type: "story_created", Payload: st})
 	writeJSON(w, http.StatusCreated, st)
@@ -213,8 +198,6 @@ func (s *Server) handleUpdateStory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go s.vectorizeStory(existing)
-
 	s.wsHub.Broadcast(ws.Message{Type: "story_updated", Payload: existing})
 	writeJSON(w, http.StatusOK, existing)
 }
@@ -225,8 +208,6 @@ func (s *Server) handleDeleteStory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	go s.deleteStoryVectors(id)
 
 	s.wsHub.Broadcast(ws.Message{Type: "story_deleted", Payload: map[string]string{"id": id}})
 	w.WriteHeader(http.StatusNoContent)
@@ -378,8 +359,6 @@ func (s *Server) handleAddContext(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	go s.vectorizeContextEntry(&entry)
 
 	writeJSON(w, http.StatusCreated, entry)
 }
@@ -710,7 +689,6 @@ func (s *Server) handleScanOrgPRs(w http.ResponseWriter, r *http.Request) {
 		}
 		st.Tasks = []*task.StoryTask{t}
 
-		go s.vectorizeStory(st)
 		s.wsHub.Broadcast(ws.Message{Type: "story_created", Payload: st})
 		created++
 	}
@@ -798,129 +776,6 @@ func (s *Server) handleUnsnoozeStory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// --- Suggest / Chat handlers ---
-
-func (s *Server) handleSuggest(w http.ResponseWriter, r *http.Request) {
-	s.refreshPRStates()
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming not supported")
-		return
-	}
-
-	result, err := s.ctxMgr.SuggestStream(r.Context(), func(chunk string) {
-		data, _ := json.Marshal(map[string]string{"chunk": chunk})
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	})
-
-	if err != nil {
-		log.Printf("suggest error: %v", err)
-		data, _ := json.Marshal(map[string]string{"error": err.Error()})
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-		return
-	}
-
-	data, _ := json.Marshal(map[string]string{"done": result.Suggestion})
-	fmt.Fprintf(w, "data: %s\n\n", data)
-	flusher.Flush()
-}
-
-func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
-	var req context.ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	s.refreshPRStates()
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming not supported")
-		return
-	}
-
-	result, err := s.ctxMgr.ChatStream(r.Context(), req.Message, func(chunk string) {
-		data, _ := json.Marshal(map[string]string{"chunk": chunk})
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	})
-
-	if err != nil {
-		log.Printf("chat error: %v", err)
-		data, _ := json.Marshal(map[string]string{"error": err.Error()})
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-		return
-	}
-
-	data, _ := json.Marshal(map[string]string{"done": result.Reply})
-	fmt.Fprintf(w, "data: %s\n\n", data)
-	flusher.Flush()
-}
-
-// --- vectorization ---
-
-func (s *Server) vectorizeStory(st *task.Story) {
-	content := st.Title
-	if st.Description != "" {
-		content += "\n" + st.Description
-	}
-	if st.Project != "" {
-		content = "[" + st.Project + "] " + content
-	}
-
-	if err := s.vectorStore.Upsert(gocontext.Background(), vectorstore.PointPayload{
-		SourceType: "story",
-		SourceID:   st.ID,
-		Project:    st.Project,
-		Content:    content,
-		CreatedAt:  st.CreatedAt.Format(time.RFC3339),
-	}); err != nil {
-		log.Printf("warning: failed to vectorize story %s: %v", st.ID, err)
-	}
-}
-
-func (s *Server) vectorizeContextEntry(e *task.ContextEntry) {
-	content := fmt.Sprintf("[%s] %s", e.EntryType, e.Content)
-
-	if err := s.vectorStore.Upsert(gocontext.Background(), vectorstore.PointPayload{
-		SourceType: "context_entry",
-		SourceID:   e.ID,
-		StoryID:    e.StoryID,
-		Content:    content,
-		CreatedAt:  e.CreatedAt.Format(time.RFC3339),
-	}); err != nil {
-		log.Printf("warning: failed to vectorize context entry %s: %v", e.ID, err)
-	}
-}
-
-func (s *Server) deleteStoryVectors(storyID string) {
-	if err := s.vectorStore.DeletePoints([]string{storyID}); err != nil {
-		log.Printf("warning: failed to delete story vector %s: %v", storyID, err)
-	}
-
-	filter := map[string]any{
-		"must": []map[string]any{
-			{"key": "story_id", "match": map[string]any{"value": storyID}},
-		},
-	}
-	if err := s.vectorStore.DeleteByFilter(filter); err != nil {
-		log.Printf("warning: failed to delete context vectors for story %s: %v", storyID, err)
-	}
-}
-
 // --- helpers ---
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -947,3 +802,4 @@ func corsMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+

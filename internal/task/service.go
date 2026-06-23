@@ -12,7 +12,6 @@ type StoryStore interface {
 	UnsnoozeStory(id string) error
 	CreateStoryTask(t *StoryTask) error
 	GetStoryTask(id string) (*StoryTask, error)
-	ListStoryTasks(storyID string) ([]*StoryTask, error)
 	UpdateStoryTask(t *StoryTask) error
 	DeleteStoryTask(id string) error
 	AddTaskDep(taskID, dependsOnID string) error
@@ -68,10 +67,6 @@ func (s *StoryService) AddTask(t *StoryTask) error {
 
 func (s *StoryService) GetTask(id string) (*StoryTask, error) {
 	return s.store.GetStoryTask(id)
-}
-
-func (s *StoryService) ListTasks(storyID string) ([]*StoryTask, error) {
-	return s.store.ListStoryTasks(storyID)
 }
 
 func (s *StoryService) UpdateTask(t *StoryTask) error {

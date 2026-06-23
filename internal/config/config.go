@@ -8,9 +8,7 @@ import (
 
 type Config struct {
 	Server      ServerConfig       `yaml:"server"`
-	LLM         LLMConfig          `yaml:"llm"`
 	Store       StoreConfig        `yaml:"store"`
-	Qdrant      QdrantConfig       `yaml:"qdrant"`
 	GitHub      GitHubConfig       `yaml:"github"`
 	LayerChains []LayerChainConfig `yaml:"layer_chains"`
 }
@@ -30,37 +28,15 @@ type ServerConfig struct {
 	Port int `yaml:"port"`
 }
 
-type LLMConfig struct {
-	Provider       string `yaml:"provider"`
-	ChatModel      string `yaml:"chat_model"`
-	EmbeddingModel string `yaml:"embedding_model"`
-	Endpoint       string `yaml:"endpoint"`
-}
-
 type StoreConfig struct {
 	SQLitePath string `yaml:"sqlite_path"`
-}
-
-type QdrantConfig struct {
-	Endpoint   string `yaml:"endpoint"`
-	Collection string `yaml:"collection"`
 }
 
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{Port: 20135},
-		LLM: LLMConfig{
-			Provider:       "ollama",
-			ChatModel:      "qwen2.5:14b",
-			EmbeddingModel: "nomic-embed-text",
-			Endpoint:       "http://localhost:11434",
-		},
 		Store: StoreConfig{
 			SQLitePath: "~/.maidirector/data.db",
-		},
-		Qdrant: QdrantConfig{
-			Endpoint:   "http://localhost:6333",
-			Collection: "maidirector",
 		},
 		LayerChains: []LayerChainConfig{
 			{Name: "default", Layers: []string{"proto", "microservice", "gateway", "frontend"}},
