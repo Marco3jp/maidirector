@@ -797,6 +797,12 @@ button:disabled {
   border-color: #3b82f6;
 }
 
+.story-unapproved-toggle.active {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: #f59e0b;
+  color: #b45309;
+}
+
 .branch-copy-chip {
   display: inline-flex;
   align-items: center;
