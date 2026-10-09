@@ -11,7 +11,7 @@ layer_chains:
     layers: [backend, frontend]
 
 github:
-  org: your-org
+  org: your-org  # gh search prs --owner に渡す組織名
   exclude_authors: []
   # bot_policy: "exclude" (default) or priority number: 1 (highest) - 5 (lowest)
   # bot_policy: exclude

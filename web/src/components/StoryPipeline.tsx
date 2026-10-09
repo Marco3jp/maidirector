@@ -736,7 +736,6 @@ export function StoryPipeline({ stories, onRefresh, collapseSignal, expandSignal
                     <PipelineStage
                       key={t.id}
                       task={t}
-                      storyId={story.id}
                       showArrow={showArrow}
                       blocked={blocked}
                       onStatusChange={(newStatus) => handleTaskStatusChange(story, t.id, newStatus)}
@@ -935,7 +934,6 @@ function SingleTaskPRRow({
 
 function PipelineStage({
   task,
-  storyId,
   showArrow,
   blocked,
   onStatusChange,
@@ -943,7 +941,6 @@ function PipelineStage({
   onRefreshPR,
 }: {
   task: StoryTask;
-  storyId: string;
   showArrow: boolean;
   blocked: boolean;
   onStatusChange: (status: TaskStatus) => void;
